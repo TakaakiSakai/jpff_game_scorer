@@ -29,24 +29,49 @@ function App({ signOut, user }: WithAuthenticatorProps) {
 
   // CSV出力（簡易）
   function downloadCSV() {
-    const headers = ['date','venue','home','away','q1H','q1A','q2H','q2A','q3H','q3A','q4H','q4A','otH','otA','finalH','finalA','notes']
-    const rows = games.map(g=>{
-      const home = teams.find(t=>t.id===g.homeTeamID)?.name || ''
-      const away = teams.find(t=>t.id===g.awayTeamID)?.name || ''
-      const totals = calc(g)
+    const headers: string[] = [
+      'date','venue','home','away',
+      'q1H','q1A','q2H','q2A','q3H','q3A','q4H','q4A',
+      'otH','otA','finalH','finalA','notes'
+    ];
+  
+    const rows: string[][] = games.map(g => {
+      const home = teams.find(t=>t.id===g.homeTeamID)?.name ?? '';
+      const away = teams.find(t=>t.id===g.awayTeamID)?.name ?? '';
+      const toS = (v: unknown) => String(v ?? '');
+  
+      const finalH = (g.finalHome ?? (
+        (g.q1Home ?? 0)+(g.q2Home ?? 0)+(g.q3Home ?? 0)+(g.q4Home ?? 0)+(g.otHome ?? 0)
+      ));
+      const finalA = (g.finalAway ?? (
+        (g.q1Away ?? 0)+(g.q2Away ?? 0)+(g.q3Away ?? 0)+(g.q4Away ?? 0)+(g.otAway ?? 0)
+      ));
+  
       return [
-        g.date, g.venue ?? '', home, away,
-        g.q1Home ?? 0, g.q1Away ?? 0, g.q2Home ?? 0, g.q2Away ?? 0,
-        g.q3Home ?? 0, g.q3Away ?? 0, g.q4Home ?? 0, g.q4Away ?? 0,
-        g.otHome ?? 0, g.otAway ?? 0, totals.h, totals.a, (g.notes ?? '').replaceAll('\n',' ')
-      ].join(',')
-    })
-    const csv = [headers.join(','), ...rows].join('\n')
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob); const a = document.createElement('a')
-    a.href = url; a.download = `jpff_games_${new Date().toISOString().slice(0,10)}.csv`; a.click()
-    URL.revokeObjectURL(url)
+        toS(g.date),
+        toS(g.venue),
+        home,
+        away,
+        toS(g.q1Home), toS(g.q1Away),
+        toS(g.q2Home), toS(g.q2Away),
+        toS(g.q3Home), toS(g.q3Away),
+        toS(g.q4Home), toS(g.q4Away),
+        toS(g.otHome),  toS(g.otAway),
+        toS(finalH),    toS(finalA),
+        toS((g.notes ?? '').toString().replaceAll('\n',' '))
+      ];
+    });
+  
+    const csv = [headers, ...rows].map(r => r.join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `jpff_games_${new Date().toISOString().slice(0,10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
+  
 
   return (
     <div style={{maxWidth:900, margin:'0 auto', padding:16}}>
