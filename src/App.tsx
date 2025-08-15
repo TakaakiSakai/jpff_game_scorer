@@ -1,15 +1,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-// App.tsx — No sign-in required. Full editor + CSV. Team names are local only.
+// App.tsx — Single page: Game info + Play editor on one screen. No sign-in required.
 
 import React, { useEffect, useMemo, useState } from 'react'
-import { BrowserRouter, Routes, Route, Link, useNavigate, useParams } from 'react-router-dom'
 import '@aws-amplify/ui-react/styles.css' // スタイルだけ利用（Authenticatorは使わない）
 import { generateClient } from 'aws-amplify/api'
 
 // ===== Amplify client =====
 const client = generateClient()
 
-// ===== GraphQL (Game/Play only. Team is使わない) =====
+// ===== GraphQL (Game/Play) =====
 const GET_GAME = /* GraphQL */ `
   query GetGame($id: ID!) {
     getGame(id: $id) { id date venue home homeTeamID awayTeamID status editToken }
@@ -107,6 +106,7 @@ const ON_UPDATE_PLAY = /* GraphQL */ `
 // ===== Local team-name store (ブラウザ localStorage) =====
 type LocalNames = { home?: string; visitor?: string }
 const LS_KEY = (gameId: string) => `jpff:gameNames:${gameId}`
+const LAST_GAME_KEY = 'jpff:lastGameId'
 const setLocalNames = (gameId: string, names: LocalNames) =>
   localStorage.setItem(LS_KEY(gameId), JSON.stringify(names))
 const getLocalNames = (gameId: string): LocalNames => {
@@ -128,49 +128,30 @@ const scorePoints = (method?: string) => {
 }
 const uuid = () => Math.random().toString(36).slice(2) + Date.now().toString(36)
 
-// ===== App root =====
+// ===== App (単一画面) =====
 export default function App() {
-  return (
-    <>
-      <Style />
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<Home />} />
-        <Route path="/setup" element={<Setup />} />
-        <Route path="/game/:id" element={<Game />} />
-        <Route path="*" element={<NF />} />
-      </Routes>
-    </BrowserRouter>
-    </>
-  )
-}
-
-// ===== Home =====
-function Home() {
-  return (
-    <div className="page">
-      <Header title="【JPFF East】" subtitle="Game Scorer" />
-      <div className="card">
-        <div className="row gap">
-          <Link className="btn" to="/setup">試合を作成</Link>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ===== Setup（試合作成：チーム名はローカル保存のみ） =====
-function Setup() {
-  const nav = useNavigate()
+  // 試合情報（作成前に入力）
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10))
   const [venue, setVenue] = useState('')
   const [home, setHome] = useState('')
   const [visitor, setVisitor] = useState('')
-  const [saving, setSaving] = useState(false)
 
+  // 作成後の状態
+  const [gameId, setGameId] = useState<string | null>(() => localStorage.getItem(LAST_GAME_KEY) || null)
+  const [game, setGame] = useState<any>(null)
+  const [plays, setPlays] = useState<any[]>([])
+  const [loading, setLoading] = useState(false)
+  const [savingGame, setSavingGame] = useState(false)
+
+  // 直近の gameId を復元してチーム名を表示
+  const names = useMemo(() => gameId ? getLocalNames(gameId) : {}, [gameId])
+  const homeName = game?.home || names.home || home || 'Home'
+  const visitorName = game?.visitor || names.visitor || visitor || 'Visitor'
+
+  // ゲーム作成
   const createGame = async () => {
     if (!home || !visitor) { alert('ホーム / ビジター を入力してください'); return }
-    setSaving(true)
+    setSavingGame(true)
     try {
       const input = {
         date, venue,
@@ -182,52 +163,14 @@ function Setup() {
       const id = r?.data?.createGame?.id
       if (!id) throw new Error('createGame failed')
       setLocalNames(id, { home, visitor })
-      nav(`/game/${id}`)
+      localStorage.setItem(LAST_GAME_KEY, id)
+      setGameId(id)
     } catch (e: any) {
-      alert(e?.errors?.[0]?.message || e?.message || '作成に失敗しました')
-    } finally { setSaving(false) }
+      alert(e?.errors?.[0]?.message || e?.message || '試合作成に失敗しました')
+    } finally { setSavingGame(false) }
   }
 
-  return (
-    <div className="page">
-      <Header title="【JPFF East】" subtitle="Game Scorer" />
-      <div className="card">
-        <h2>試合作成（サインイン不要）</h2>
-        <div className="grid2">
-          <div className="block"><label>試合日</label>
-            <input className="input" type="date" value={date} onChange={e => setDate(e.target.value)} />
-          </div>
-          <div className="block"><label>会場</label>
-            <input className="input" value={venue} onChange={e => setVenue(e.target.value)} />
-          </div>
-          <div className="block"><label>ホーム</label>
-            <input className="input" value={home} onChange={e => setHome(e.target.value)} placeholder="例) ブラウンディングス" />
-          </div>
-          <div className="block"><label>ビジター</label>
-            <input className="input" value={visitor} onChange={e => setVisitor(e.target.value)} placeholder="例) 鎌倉ラザロ" />
-          </div>
-        </div>
-        <div className="space" />
-        <button className="btn" disabled={saving} onClick={createGame}>{saving ? '作成中…' : '作成'}</button>
-        <div className="space" />
-        <Link className="muted" to="/">&laquo; トップへ</Link>
-      </div>
-    </div>
-  )
-}
-
-// ===== Game =====
-function Game() {
-  const { id: gameId } = useParams()
-  const [game, setGame] = useState<any>(null)
-  const [plays, setPlays] = useState<any[]>([])
-  const [loading, setLoading] = useState(true)
-
-  const names = useMemo(() => gameId ? getLocalNames(gameId) : {}, [gameId])
-  const homeName = game?.home || names.home || 'Home'
-  const visitorName = game?.visitor || names.visitor || 'Visitor'
-
-  // Game 取得
+  // gameId が決まったら Game と Plays をロード
   useEffect(() => {
     if (!gameId) return
     let cancelled = false
@@ -235,14 +178,14 @@ function Game() {
       setLoading(true)
       try {
         const r: any = await client.graphql({ query: GET_GAME, variables: { id: gameId }, authMode: 'iam' })
-        if (!cancelled) setGame(r?.data?.getGame || null)
-      } catch { /* ignore */ }
-      finally { if (!cancelled) setLoading(false) }
+        if (!cancelled) setGame(r?.data?.getGame || { id: gameId, date, venue })
+      } catch {
+        if (!cancelled) setGame({ id: gameId, date, venue })
+      } finally { if (!cancelled) setLoading(false) }
     })()
     return () => { cancelled = true }
   }, [gameId])
 
-  // Plays 取得
   const loadPlays = async () => {
     if (!gameId) return
     try {
@@ -260,10 +203,11 @@ function Game() {
       setPlays(items)
     }
   }
-  useEffect(() => { loadPlays() }, [gameId])
+  useEffect(() => { if (gameId) loadPlays() }, [gameId])
 
-  // サブスク（認証なしで動く設定前提）
+  // サブスクリプション（未認証で動作する設定前提）
   useEffect(() => {
+    if (!gameId) return
     const s1: any = (client.graphql({ query: ON_CREATE_PLAY, authMode: 'iam' }) as any).subscribe?.({
       next: ({ data }: any) => {
         const p = data?.onCreatePlay
@@ -283,6 +227,7 @@ function Game() {
     return () => { try { s1?.unsubscribe?.() } catch {} try { s2?.unsubscribe?.() } catch {} }
   }, [gameId])
 
+  // スコアボード
   const board = useMemo(() => {
     const blank = { Q1: 0, Q2: 0, Q3: 0, Q4: 0, Total: 0 }
     const H = { ...blank }, V = { ...blank }
@@ -299,35 +244,83 @@ function Game() {
     return { H, V }
   }, [plays])
 
-  if (loading) return <div className="page"><Header title="【JPFF East】" subtitle="Game Scorer" /><div className="card">読み込み中…</div></div>
-  if (!game) return <div className="page"><Header title="【JPFF East】" subtitle="Game Scorer" /><div className="card">試合が見つかりません。</div></div>
-
   return (
-    <div className="page">
-      <Header title="【JPFF East】" subtitle="Game Scorer" />
+    <>
+      <Style />
+      <div className="page">
+        <Header title="【JPFF East】" subtitle="Game Scorer" />
 
-      <div className="card score">
-        <table className="scoreTbl">
-          <thead><tr><th></th><th>1Q</th><th>2Q</th><th>3Q</th><th>4Q</th><th>Total</th></tr></thead>
-          <tbody>
-            <tr><th>{homeName}</th><td>{board.H.Q1}</td><td>{board.H.Q2}</td><td>{board.H.Q3}</td><td>{board.H.Q4}</td><td>{board.H.Total}</td></tr>
-            <tr><th>{visitorName}</th><td>{board.V.Q1}</td><td>{board.V.Q2}</td><td>{board.V.Q3}</td><td>{board.V.Q4}</td><td>{board.V.Total}</td></tr>
-          </tbody>
-        </table>
+        {/* 1) 試合情報（最上段） */}
+        <div className="card">
+          <h2>試合情報</h2>
+          <div className="grid2">
+            <div className="block"><label>試合日</label>
+              <input className="input" type="date" value={date} onChange={e => setDate(e.target.value)} />
+            </div>
+            <div className="block"><label>会場</label>
+              <input className="input" value={venue} onChange={e => setVenue(e.target.value)} />
+            </div>
+            <div className="block"><label>ホーム</label>
+              <input className="input" value={home} onChange={e => setHome(e.target.value)} placeholder="例) ブラウンディングス" />
+            </div>
+            <div className="block"><label>ビジター</label>
+              <input className="input" value={visitor} onChange={e => setVisitor(e.target.value)} placeholder="例) 鎌倉ラザロ" />
+            </div>
+          </div>
+
+          <div className="row gap" style={{ marginTop: 12 }}>
+            <button className="btn" disabled={savingGame} onClick={createGame}>
+              {gameId ? '新しい試合として開始' : (savingGame ? '作成中…' : '試合開始')}
+            </button>
+            {gameId && (
+              <button className="btn gray" onClick={()=>{ localStorage.removeItem(LAST_GAME_KEY); setGameId(null); setGame(null); setPlays([]) }}>
+                この試合をリセット
+              </button>
+            )}
+          </div>
+          <div className="muted" style={{ marginTop: 8 }}>
+            ※ 作成後はブラウザを閉じても、直近の試合は自動復元されます（同一端末/ブラウザ）。
+          </div>
+        </div>
+
+        {/* 2) スコアボード（gameId がある時） */}
+        {gameId && (
+          <div className="card score">
+            <table className="scoreTbl">
+              <thead><tr><th></th><th>1Q</th><th>2Q</th><th>3Q</th><th>4Q</th><th>Total</th></tr></thead>
+              <tbody>
+                <tr><th>{homeName}</th><td>{board.H.Q1}</td><td>{board.H.Q2}</td><td>{board.H.Q3}</td><td>{board.H.Q4}</td><td>{board.H.Total}</td></tr>
+                <tr><th>{visitorName}</th><td>{board.V.Q1}</td><td>{board.V.Q2}</td><td>{board.V.Q3}</td><td>{board.V.Q4}</td><td>{board.V.Total}</td></tr>
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* 3) プレー入力（gameId がある時） */}
+        {gameId && (
+          <PlayEditor
+            gameId={gameId}
+            home={homeName}
+            visitor={visitorName}
+            plays={plays}
+            onSaved={loadPlays}
+          />
+        )}
+
+        {/* 4) プレイ一覧 + CSV */}
+        {gameId && (
+          <div className="card">
+            <PlaysTable plays={plays} home={homeName} visitor={visitorName} />
+          </div>
+        )}
+
+        <footer className="footer">
+          <CSVButton plays={plays} home={homeName} visitor={visitorName} />
+        </footer>
+
+        {loading && <div className="card">読み込み中…</div>}
       </div>
-
-      {/* 元UIフル（備考含む） */}
-      <PlayEditor gameId={game.id} home={homeName} visitor={visitorName} plays={plays} onSaved={loadPlays} />
-
-      <div className="card">
-        <PlaysTable plays={plays} home={homeName} visitor={visitorName} />
-      </div>
-
-      <footer className="footer">
-        <button className="btn gray" onClick={() => navigator.clipboard.writeText(location.href)}>URLコピー</button>
-        <CSVButton plays={plays} home={homeName} visitor={visitorName} />
-      </footer>
-    </div>
+    </>
   )
 }
 
@@ -552,7 +545,6 @@ function Header({ title, subtitle }:{ title:string, subtitle:string }) {
     </div>
   )
 }
-function NF(){ return <div className="page"><Header title="【JPFF East】" subtitle="Game Scorer"/><div className="card">ページが見つかりません。</div></div> }
 function blankPlay(){ return {
   q:'1Q', time:'12:00', attackTeam:'home', fieldPos:'H', ballOn:null, toGo:null, down:1,
   gainYds:null, playType:'', fd:false, sack:false,
