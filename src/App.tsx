@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-// App.tsx — Dark UI + full play editor, team names are stored locally only.
+// App.tsx — Dark UI, full play editor (備考あり), local draft queue with sync, no colorMode prop.
 
 import React, { useEffect, useMemo, useState } from 'react'
 import { BrowserRouter, Routes, Route, Link, useNavigate, useParams } from 'react-router-dom'
@@ -11,7 +11,7 @@ import { getCurrentUser } from 'aws-amplify/auth'
 // ===== Amplify client =====
 const client = generateClient()
 
-// ===== GraphQL (Game/Play だけ。Team は使わない) =====
+// ===== GraphQL (Game / Play。Teamは使わない) =====
 const GET_GAME = /* GraphQL */ `
   query GetGame($id: ID!) {
     getGame(id: $id) { id date venue home homeTeamID awayTeamID status editToken }
@@ -130,6 +130,27 @@ const scorePoints = (method?: string) => {
 }
 const uuid = () => Math.random().toString(36).slice(2) + Date.now().toString(36)
 
+// ===== Draft (local only 下書きキュー) =====
+type DraftPlay = any & { id: string; __draft?: true }
+const draftKey = (gameId: string) => `jpff:drafts:${gameId}`
+const loadDrafts = (gameId: string): DraftPlay[] => {
+  try { return JSON.parse(localStorage.getItem(draftKey(gameId)) || '[]') } catch { return [] }
+}
+const saveDrafts = (gameId: string, drafts: DraftPlay[]) => {
+  localStorage.setItem(draftKey(gameId), JSON.stringify(drafts))
+}
+const enqueueDraft = (gameId: string, play: any) => {
+  const d: DraftPlay = { ...play, id: `draft-${uuid()}`, __draft: true }
+  const cur = loadDrafts(gameId)
+  cur.push(d)
+  saveDrafts(gameId, cur)
+  return d
+}
+const clearDraft = (gameId: string, draftId: string) => {
+  const cur = loadDrafts(gameId).filter(d => d.id !== draftId)
+  saveDrafts(gameId, cur)
+}
+
 // ===== App root =====
 export default function App() {
   return (
@@ -158,9 +179,9 @@ function Home() {
         {!signedIn && (
           <>
             <h3>サインイン / ユーザー作成</h3>
-            {/* ダークモード固定 */}
+            {/* ダークはCSSで強制 */}
             <div style={{ marginTop: 10 }}>
-              <Authenticator colorMode="dark" signUpAttributes={['email']} />
+              <Authenticator />
             </div>
             <div className="space" />
           </>
@@ -240,7 +261,7 @@ function Setup() {
               <button className="btn gray" onClick={() => setShowAuth(false)}>閉じる</button>
             </div>
             <div style={{ marginTop: 12 }}>
-              <Authenticator colorMode="dark" signUpAttributes={['email']}>
+              <Authenticator>
                 {({ user }) => { if (user) { setShowAuth(false) } return null }}
               </Authenticator>
             </div>
@@ -283,38 +304,47 @@ function Game() {
     return () => { cancelled = true }
   }, [gameId])
 
-  // Plays 取得
+  // Plays 取得（ドラフトとマージ）
   const loadPlays = async () => {
     if (!gameId) return
+    let serverItems: any[] = []
     try {
       const r: any = await client.graphql({
         query: LIST_PLAYS_BY_GAME, variables: { gameId, sortDirection: 'ASC' },
         authMode: signedIn ? 'userPool' : 'iam'
       })
-      setPlays(r?.data?.listPlaysByGame?.items || [])
+      serverItems = r?.data?.listPlaysByGame?.items || []
     } catch {
       const r: any = await client.graphql({
         query: LIST_PLAYS_FALLBACK, variables: { filter: { gameId: { eq: gameId } }, limit: 1000 },
         authMode: signedIn ? 'userPool' : 'iam'
       })
-      const items = (r?.data?.listPlays?.items || []).sort((a: any, b: any) =>
-        (a.createdAt || '').localeCompare(b.createdAt || '')
-      )
-      setPlays(items)
+      serverItems = (r?.data?.listPlays?.items || [])
     }
+    const drafts = loadDrafts(gameId)
+    const merged = [...serverItems, ...drafts].sort((a:any,b:any)=>
+      (a.createdAt||'').localeCompare(b.createdAt||'')
+    )
+    setPlays(merged)
   }
   useEffect(() => { loadPlays() }, [gameId, signedIn])
 
-  // サブスク
+  // サブスク（ドラフトと重複があれば消す）
   useEffect(() => {
     const mode = signedIn ? 'userPool' : 'iam'
     const s1: any = (client.graphql({ query: ON_CREATE_PLAY, authMode: mode }) as any).subscribe?.({
       next: ({ data }: any) => {
         const p = data?.onCreatePlay
         if (p?.gameId !== gameId) return
-        setPlays(prev => prev.some(x => x.id === p.id) ? prev : [...prev, p].sort((a: any, b: any) =>
-          (a.createdAt || '').localeCompare(b.createdAt || '')
-        ))
+        const drafts = loadDrafts(gameId!)
+        const hit = drafts.find(d => d.createdAt === p.createdAt && d.playType === p.playType && d.time === p.time)
+        if (hit) clearDraft(gameId!, hit.id)
+        setPlays(prev => {
+          const base = prev.filter(x => !(x.__draft && hit && x.id === hit.id))
+          return base.some(x => x.id === p.id) ? base : [...base, p].sort((a:any,b:any)=>
+            (a.createdAt||'').localeCompare(b.createdAt||'')
+          )
+        })
       }
     })
     const s2: any = (client.graphql({ query: ON_UPDATE_PLAY, authMode: mode }) as any).subscribe?.({
@@ -326,6 +356,28 @@ function Game() {
     })
     return () => { try { s1?.unsubscribe?.() } catch { } try { s2?.unsubscribe?.() } catch { } }
   }, [gameId, signedIn])
+
+  // ドラフト同期
+  const syncDrafts = async () => {
+    if (!signedIn || !gameId) return
+    const ds = loadDrafts(gameId)
+    if (ds.length === 0) return
+    for (const d of ds) {
+      try {
+        const payload = { ...d }; delete (payload as any).id; delete (payload as any).__draft
+        await client.graphql({ query: CREATE_PLAY, variables: { input: payload }, authMode: 'userPool' })
+        clearDraft(gameId, d.id)
+      } catch { /* 残ったものは次回また試行 */ }
+    }
+    await loadPlays()
+  }
+  useEffect(()=>{ syncDrafts() }, [signedIn])
+  useEffect(()=>{
+    const h = () => syncDrafts()
+    window.addEventListener('focus', h)
+    const t = setInterval(syncDrafts, 15000)
+    return ()=>{ window.removeEventListener('focus', h); clearInterval(t) }
+  }, [signedIn, gameId])
 
   const board = useMemo(() => {
     const blank = { Q1: 0, Q2: 0, Q3: 0, Q4: 0, Total: 0 }
@@ -360,7 +412,6 @@ function Game() {
         </table>
       </div>
 
-      {/* ここが元の “フル” 入力UI（備考含む） */}
       <PlayEditor gameId={game.id} home={homeName} visitor={visitorName} plays={plays} onSaved={loadPlays} />
 
       <div className="card">
@@ -369,6 +420,7 @@ function Game() {
 
       <footer className="footer">
         <button className="btn gray" onClick={() => navigator.clipboard.writeText(location.href)}>URLコピー</button>
+        <button className="btn" onClick={syncDrafts}>同期</button>
         <CSVButton plays={plays} home={homeName} visitor={visitorName} />
       </footer>
     </div>
@@ -389,16 +441,20 @@ function PlayEditor({ gameId, home, visitor, plays, onSaved }:
 
   const save = async () => {
     setSaving(true)
+    const base = { ...p, gameId, createdAt: p.createdAt || new Date().toISOString() }
+
     try {
-      const base = { ...p, gameId, createdAt: p.createdAt || new Date().toISOString() }
-      if (editingId) {
-        await client.graphql({ query: UPDATE_PLAY, variables: { input: { ...base, id: editingId } }, authMode: 'userPool' })
-      } else {
-        await client.graphql({ query: CREATE_PLAY, variables: { input: base }, authMode: 'userPool' })
-      }
+      await client.graphql({
+        query: editingId ? UPDATE_PLAY : CREATE_PLAY,
+        variables: { input: editingId ? { ...base, id: editingId } : base },
+        authMode: 'userPool'
+      })
       setP(blankPlay()); setEditingId(null); onSaved()
     } catch (e: any) {
-      alert(e?.errors?.[0]?.message || e?.message || '保存に失敗しました')
+      // サインインなし・権限エラー時はドラフトへ
+      enqueueDraft(gameId, { ...base })
+      setP(blankPlay()); setEditingId(null); onSaved()
+      alert('ネットワーク/権限エラーのため「ローカル下書き」に保存しました。サインイン後に同期します。')
     } finally { setSaving(false) }
   }
   const edit = (row: any) => { setEditingId(row.id); setP({ ...row }) }
@@ -495,7 +551,7 @@ function PlaysTable({ plays, home, visitor }:{ plays:any[], home:string, visitor
           </tr></thead>
           <tbody>
             {[...plays].reverse().map(p =>
-              <tr key={p.id}>
+              <tr key={p.id} className={p.__draft ? 'isDraft' : ''}>
                 <td>{p.q}</td>
                 <td>{p.time}</td>
                 <td>{p.attackTeam==='home'?home: p.attackTeam==='visitor'?visitor: p.attackTeam}</td>
@@ -592,7 +648,7 @@ function Header({ title, subtitle }:{ title:string, subtitle:string }) {
       <div className="title">{title}<br/>{subtitle}</div>
       <div className="icons">
         <a className="icon" onClick={()=>navigator.clipboard.writeText(location.href)} title="URLコピー">⎘</a>
-        <Authenticator colorMode="dark" variation="modal">
+        <Authenticator variation="modal">
           {({ signOut, user }) => user
             ? <a className="icon" onClick={signOut} title="サインアウト">⇦</a>
             : <span />
@@ -611,7 +667,7 @@ function blankPlay(){ return {
   turnover:'-', penaltyY:null, remarks:'', scoreTeam:'-', scoreMethod:'-'
 }}
 
-// ===== Dark Styles =====
+// ===== Dark Styles (Amplify UI も含めて黒で塗る) =====
 function Style(){
   return (<style>{`
 :root { --bg:#0a0d12; --card:#121821; --fg:#eaf0f5; --muted:#9fb2c3; --pri:#0ea5a4; --danger:#c23636; }
@@ -653,10 +709,13 @@ table.table th{ color:var(--muted); font-weight:700; }
 
 .check{ display:flex; align-items:center; gap:8px; }
 
+/* Draft row */
+.isDraft { opacity:.65; }
+
 /* Modal */
 .modal{ position:fixed; inset:0; display:grid; place-items:center; background:rgba(0,0,0,.7); z-index:1000; }
 
-/* Amplify UI をダークに塗りつぶし */
+/* Amplify UI をダークに上書き（古い型でもOK） */
 .amplify-authenticator, .amplify-card, .amplify-flex, .amplify-view {
   --amplify-colors-background-primary: #0a0d12;
   --amplify-colors-background-secondary: #121821;
