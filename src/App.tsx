@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-// App.tsx — Single page: Game info + Play editor on one screen. No sign-in required.
+// App.tsx — Single page: Game info + Play editor + List + CSV. No sign-in, no routing.
 
 import React, { useEffect, useMemo, useState } from 'react'
 import '@aws-amplify/ui-react/styles.css' // スタイルだけ利用（Authenticatorは使わない）
@@ -128,7 +128,7 @@ const scorePoints = (method?: string) => {
 }
 const uuid = () => Math.random().toString(36).slice(2) + Date.now().toString(36)
 
-// ===== App (単一画面) =====
+// ===== App（完全シングルページ） =====
 export default function App() {
   // 試合情報（作成前に入力）
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10))
