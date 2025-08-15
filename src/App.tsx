@@ -160,7 +160,7 @@ function Home() {
             <h3>サインイン / ユーザー作成</h3>
             {/* ダークモード固定 */}
             <div style={{ marginTop: 10 }}>
-              <Authenticator signUpAttributes={['email']} />
+              <Authenticator colorMode="dark" signUpAttributes={['email']} />
             </div>
             <div className="space" />
           </>
@@ -240,7 +240,7 @@ function Setup() {
               <button className="btn gray" onClick={() => setShowAuth(false)}>閉じる</button>
             </div>
             <div style={{ marginTop: 12 }}>
-               <Authenticator signUpAttributes={['email']}>
+              <Authenticator colorMode="dark" signUpAttributes={['email']}>
                 {({ user }) => { if (user) { setShowAuth(false) } return null }}
               </Authenticator>
             </div>
@@ -592,7 +592,7 @@ function Header({ title, subtitle }:{ title:string, subtitle:string }) {
       <div className="title">{title}<br/>{subtitle}</div>
       <div className="icons">
         <a className="icon" onClick={()=>navigator.clipboard.writeText(location.href)} title="URLコピー">⎘</a>
-        <Authenticator variation="modal">
+        <Authenticator colorMode="dark" variation="modal">
           {({ signOut, user }) => user
             ? <a className="icon" onClick={signOut} title="サインアウト">⇦</a>
             : <span />
