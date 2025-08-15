@@ -1,15 +1,16 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // ↑ App.tsx の一番上だけに置く（ここ以外に同じ import を書かない）
+// App.tsx の先頭あたり
 import React, { useEffect, useMemo, useState } from 'react'
 import { Link, Routes, Route, BrowserRouter, useNavigate, useParams } from 'react-router-dom'
 
-// Amplify UI は Authenticator だけでOK（TextField/Buttonは使っていない）
-import { Authenticator } from '@aws-amplify/ui-react'
+// ここを TextField を含めて1本化
+import { Authenticator, TextField } from '@aws-amplify/ui-react'
 import '@aws-amplify/ui-react/styles.css'
 
-// Amplify
 import { generateClient } from 'aws-amplify/api'
 import { getCurrentUser } from 'aws-amplify/auth'
+
 
 // ===================== Amplify client =====================
 const client = generateClient()
