@@ -1,0 +1,1 @@
+{"root":["./vite.config.ts","./amplify/backend.ts","./amplify/auth/resource.ts","./amplify/data/resource.ts","./src/app.tsx","./src/main.tsx","./src/vite-env.d.ts"],"version":"5.9.2"}

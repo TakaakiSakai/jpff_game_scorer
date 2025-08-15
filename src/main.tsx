@@ -1,14 +1,14 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import App from './App'
+import App from './App'                // ← .tsx を付けない
 import './index.css'
 
 import { Amplify } from 'aws-amplify'
-import outputs from '../amplify_outputs.json' // 生成物
-Amplify.configure(outputs) // これで Auth/Data に接続
+import outputs from '../amplify_outputs.json'
+Amplify.configure(outputs)
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <App />
-  </React.StrictMode>,
+  </React.StrictMode>
 )
