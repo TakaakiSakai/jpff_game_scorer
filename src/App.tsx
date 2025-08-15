@@ -1,120 +1,61 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-// App.tsx — Single page: Game info + Play editor + List + CSV. No sign-in, no routing.
+// App.tsx — Single Page: Play editor + list + scoreboard + CSV (no sign-in, no backend)
+// すべてローカル保存(localStorage)。ブラウザを閉じても復元されます。
 
 import React, { useEffect, useMemo, useState } from 'react'
-import '@aws-amplify/ui-react/styles.css' // スタイルだけ利用（Authenticatorは使わない）
-import { generateClient } from 'aws-amplify/api'
+import '@aws-amplify/ui-react/styles.css' // ベースのCSSだけ拝借(Authenticatorは不使用)
 
-// ===== Amplify client =====
-const client = generateClient()
-
-// ===== GraphQL (Game/Play) =====
-const GET_GAME = /* GraphQL */ `
-  query GetGame($id: ID!) {
-    getGame(id: $id) { id date venue home homeTeamID awayTeamID status editToken }
-  }
-`
-const CREATE_GAME_BY_TEAMID = /* GraphQL */ `
-  mutation CreateGame($input: CreateGameInput!) {
-    createGame(input: $input) { id date venue homeTeamID awayTeamID status editToken }
-  }
-`
-const LIST_PLAYS_BY_GAME = /* GraphQL */ `
-  query ListPlaysByGame($gameId: ID!, $sortDirection: ModelSortDirection) {
-    listPlaysByGame(gameId: $gameId, sortDirection: $sortDirection) {
-      items {
-        id gameId createdAt
-        q time attackTeam fieldPos ballOn toGo down gainYds
-        playType fd sack
-        passerNo runnerNo kickerNo
-        tacklerNo tacklerNo2 interceptorNo
-        turnover penaltyY remarks
-        scoreTeam scoreMethod
-      }
-    }
-  }
-`
-const LIST_PLAYS_FALLBACK = /* GraphQL */ `
-  query ListPlays($filter: ModelPlayFilterInput, $limit: Int) {
-    listPlays(filter: $filter, limit: $limit) {
-      items {
-        id gameId createdAt
-        q time attackTeam fieldPos ballOn toGo down gainYds
-        playType fd sack
-        passerNo runnerNo kickerNo
-        tacklerNo tacklerNo2 interceptorNo
-        turnover penaltyY remarks
-        scoreTeam scoreMethod
-      }
-    }
-  }
-`
-const CREATE_PLAY = /* GraphQL */ `
-  mutation CreatePlay($input: CreatePlayInput!) {
-    createPlay(input: $input) {
-      id gameId createdAt
-      q time attackTeam fieldPos ballOn toGo down gainYds
-      playType fd sack
-      passerNo runnerNo kickerNo
-      tacklerNo tacklerNo2 interceptorNo
-      turnover penaltyY remarks
-      scoreTeam scoreMethod
-    }
-  }
-`
-const UPDATE_PLAY = /* GraphQL */ `
-  mutation UpdatePlay($input: UpdatePlayInput!) {
-    updatePlay(input: $input) {
-      id gameId createdAt
-      q time attackTeam fieldPos ballOn toGo down gainYds
-      playType fd sack
-      passerNo runnerNo kickerNo
-      tacklerNo tacklerNo2 interceptorNo
-      turnover penaltyY remarks
-      scoreTeam scoreMethod
-    }
-  }
-`
-const DELETE_PLAY = /* GraphQL */ `
-  mutation DeletePlay($input: DeletePlayInput!) {
-    deletePlay(input: $input) { id }
-  }
-`
-const ON_CREATE_PLAY = /* GraphQL */ `
-  subscription OnCreatePlay { onCreatePlay {
-    id gameId createdAt
-    q time attackTeam fieldPos ballOn toGo down gainYds
-    playType fd sack
-    passerNo runnerNo kickerNo
-    tacklerNo tacklerNo2 interceptorNo
-    turnover penaltyY remarks
-    scoreTeam scoreMethod
-  } }
-`
-const ON_UPDATE_PLAY = /* GraphQL */ `
-  subscription OnUpdatePlay { onUpdatePlay {
-    id gameId createdAt
-    q time attackTeam fieldPos ballOn toGo down gainYds
-    playType fd sack
-    passerNo runnerNo kickerNo
-    tacklerNo tacklerNo2 interceptorNo
-    turnover penaltyY remarks
-    scoreTeam scoreMethod
-  } }
-`
-
-// ===== Local team-name store (ブラウザ localStorage) =====
-type LocalNames = { home?: string; visitor?: string }
-const LS_KEY = (gameId: string) => `jpff:gameNames:${gameId}`
-const LAST_GAME_KEY = 'jpff:lastGameId'
-const setLocalNames = (gameId: string, names: LocalNames) =>
-  localStorage.setItem(LS_KEY(gameId), JSON.stringify(names))
-const getLocalNames = (gameId: string): LocalNames => {
-  try { return JSON.parse(localStorage.getItem(LS_KEY(gameId)) || '{}') } catch { return {} }
+// ===== Local storage =====
+const LS_KEY = 'jpff:localGame:v1'
+type Play = {
+  id: string
+  createdAt: string
+  q: '1Q'|'2Q'|'3Q'|'4Q'|'OT'
+  time: string
+  attackTeam: 'home'|'visitor'|'-'
+  fieldPos: 'H'|'V'|'-'
+  ballOn: number | null
+  down: 1|2|3|4
+  toGo: number | null
+  playType: string
+  gainYds: number | null
+  fd: boolean
+  sack: boolean
+  passerNo?: number | null
+  runnerNo?: number | null
+  kickerNo?: number | null
+  tacklerNo?: number | null
+  tacklerNo2?: number | null
+  interceptorNo?: number | null
+  turnover?: '-'|'Intercept'|'Fumble'|'4th down失敗'|'Safety'
+  penaltyY?: number | null
+  remarks?: string
+  scoreTeam?: '-'|'home'|'visitor'
+  scoreMethod?: '-'|'TD'|'FG'|'Safety'|'TFP(Kick)'|'TFP(Run)'|'TFP(Pass)'
+}
+type SaveData = {
+  date: string
+  venue: string
+  home: string
+  visitor: string
+  plays: Play[]
 }
 
+const load = (): SaveData => {
+  try { return JSON.parse(localStorage.getItem(LS_KEY) || '') as SaveData } catch { /* ignore */ }
+  // 初期値
+  return {
+    date: new Date().toISOString().slice(0,10),
+    venue: '',
+    home: '',
+    visitor: '',
+    plays: []
+  }
+}
+const save = (data: SaveData) => localStorage.setItem(LS_KEY, JSON.stringify(data))
+
 // ===== Utils =====
-const isNum = (v: any) => v !== null && v !== undefined && v !== '' && !isNaN(Number(v))
+const uuid = () => Math.random().toString(36).slice(2) + Date.now().toString(36)
 const scorePoints = (method?: string) => {
   switch (method) {
     case 'TD': return 6
@@ -126,473 +67,52 @@ const scorePoints = (method?: string) => {
     default: return 0
   }
 }
-const uuid = () => Math.random().toString(36).slice(2) + Date.now().toString(36)
 
-// ===== App（完全シングルページ） =====
+// ===== App =====
 export default function App() {
-  // 試合情報（作成前に入力）
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10))
-  const [venue, setVenue] = useState('')
-  const [home, setHome] = useState('')
-  const [visitor, setVisitor] = useState('')
+  // 試合ヘッダ（ここでチーム名や会場は編集。別画面はありません）
+  const [state, setState] = useState<SaveData>(() => load())
+  const set = <K extends keyof SaveData>(k: K, v: SaveData[K]) => setState(s => ({ ...s, [k]: v }))
 
-  // 作成後の状態
-  const [gameId, setGameId] = useState<string | null>(() => localStorage.getItem(LAST_GAME_KEY) || null)
-  const [game, setGame] = useState<any>(null)
-  const [plays, setPlays] = useState<any[]>([])
-  const [loading, setLoading] = useState(false)
-  const [savingGame, setSavingGame] = useState(false)
+  // 編集中プレー
+  const [p, setP] = useState<Play>(blankPlay())
+  const [editingId, setEditingId] = useState<string | null>(null)
 
-  // 直近の gameId を復元してチーム名を表示
-  const names = useMemo(() => gameId ? getLocalNames(gameId) : {}, [gameId])
-  const homeName = game?.home || names.home || home || 'Home'
-  const visitorName = game?.visitor || names.visitor || visitor || 'Visitor'
-
-  // ゲーム作成
-  const createGame = async () => {
-    if (!home || !visitor) { alert('ホーム / ビジター を入力してください'); return }
-    setSavingGame(true)
-    try {
-      const input = {
-        date, venue,
-        homeTeamID: 'H_' + uuid(),
-        awayTeamID: 'V_' + uuid(),
-        status: 'scheduled'
-      }
-      const r: any = await client.graphql({ query: CREATE_GAME_BY_TEAMID, variables: { input }, authMode: 'iam' })
-      const id = r?.data?.createGame?.id
-      if (!id) throw new Error('createGame failed')
-      setLocalNames(id, { home, visitor })
-      localStorage.setItem(LAST_GAME_KEY, id)
-      setGameId(id)
-    } catch (e: any) {
-      alert(e?.errors?.[0]?.message || e?.message || '試合作成に失敗しました')
-    } finally { setSavingGame(false) }
-  }
-
-  // gameId が決まったら Game と Plays をロード
-  useEffect(() => {
-    if (!gameId) return
-    let cancelled = false
-    ;(async () => {
-      setLoading(true)
-      try {
-        const r: any = await client.graphql({ query: GET_GAME, variables: { id: gameId }, authMode: 'iam' })
-        if (!cancelled) setGame(r?.data?.getGame || { id: gameId, date, venue })
-      } catch {
-        if (!cancelled) setGame({ id: gameId, date, venue })
-      } finally { if (!cancelled) setLoading(false) }
-    })()
-    return () => { cancelled = true }
-  }, [gameId])
-
-  const loadPlays = async () => {
-    if (!gameId) return
-    try {
-      const r: any = await client.graphql({
-        query: LIST_PLAYS_BY_GAME, variables: { gameId, sortDirection: 'ASC' }, authMode: 'iam'
-      })
-      setPlays(r?.data?.listPlaysByGame?.items || [])
-    } catch {
-      const r: any = await client.graphql({
-        query: LIST_PLAYS_FALLBACK, variables: { filter: { gameId: { eq: gameId } }, limit: 1000 }, authMode: 'iam'
-      })
-      const items = (r?.data?.listPlays?.items || []).sort((a: any, b: any) =>
-        (a.createdAt || '').localeCompare(b.createdAt || '')
-      )
-      setPlays(items)
-    }
-  }
-  useEffect(() => { if (gameId) loadPlays() }, [gameId])
-
-  // サブスクリプション（未認証で動作する設定前提）
-  useEffect(() => {
-    if (!gameId) return
-    const s1: any = (client.graphql({ query: ON_CREATE_PLAY, authMode: 'iam' }) as any).subscribe?.({
-      next: ({ data }: any) => {
-        const p = data?.onCreatePlay
-        if (p?.gameId !== gameId) return
-        setPlays(prev => prev.some(x => x.id === p.id) ? prev : [...prev, p].sort((a: any, b: any) =>
-          (a.createdAt || '').localeCompare(b.createdAt || '')
-        ))
-      }
-    })
-    const s2: any = (client.graphql({ query: ON_UPDATE_PLAY, authMode: 'iam' }) as any).subscribe?.({
-      next: ({ data }: any) => {
-        const p = data?.onUpdatePlay
-        if (p?.gameId !== gameId) return
-        setPlays(prev => prev.map(x => x.id === p.id ? { ...x, ...p } : x))
-      }
-    })
-    return () => { try { s1?.unsubscribe?.() } catch {} try { s2?.unsubscribe?.() } catch {} }
-  }, [gameId])
+  // 永続化
+  useEffect(() => { save(state) }, [state])
 
   // スコアボード
   const board = useMemo(() => {
-    const blank = { Q1: 0, Q2: 0, Q3: 0, Q4: 0, Total: 0 }
+    const blank = { Q1:0, Q2:0, Q3:0, Q4:0, Total:0 }
     const H = { ...blank }, V = { ...blank }
-    plays.forEach(p => {
-      const q = (p.q || '1Q') as string
-      const tm = p.scoreTeam
-      const pt = scorePoints(p.scoreMethod)
-      if (pt <= 0 || !tm) return
-      const row = tm === 'home' ? H : V
-      const key = ({ '1Q': 'Q1', '2Q': 'Q2', '3Q': 'Q3', '4Q': 'Q4' } as any)[q] || 'Q1'
-      ;(row as any)[key] += pt
-      row.Total += pt
+    state.plays.forEach(row => {
+      const pt = scorePoints(row.scoreMethod)
+      if (!pt || row.scoreTeam === '-' || !row.scoreTeam) return
+      const tgt = row.scoreTeam === 'home' ? H : V
+      const key = ({'1Q':'Q1','2Q':'Q2','3Q':'Q3','4Q':'Q4'} as any)[row.q] || 'Q1'
+      ;(tgt as any)[key] += pt
+      tgt.Total += pt
     })
     return { H, V }
-  }, [plays])
+  }, [state.plays])
 
-  return (
-    <>
-      <Style />
-      <div className="page">
-        <Header title="【JPFF East】" subtitle="Game Scorer" />
-
-        {/* 1) 試合情報（最上段） */}
-        <div className="card">
-          <h2>試合情報</h2>
-          <div className="grid2">
-            <div className="block"><label>試合日</label>
-              <input className="input" type="date" value={date} onChange={e => setDate(e.target.value)} />
-            </div>
-            <div className="block"><label>会場</label>
-              <input className="input" value={venue} onChange={e => setVenue(e.target.value)} />
-            </div>
-            <div className="block"><label>ホーム</label>
-              <input className="input" value={home} onChange={e => setHome(e.target.value)} placeholder="例) ブラウンディングス" />
-            </div>
-            <div className="block"><label>ビジター</label>
-              <input className="input" value={visitor} onChange={e => setVisitor(e.target.value)} placeholder="例) 鎌倉ラザロ" />
-            </div>
-          </div>
-
-          <div className="row gap" style={{ marginTop: 12 }}>
-            <button className="btn" disabled={savingGame} onClick={createGame}>
-              {gameId ? '新しい試合として開始' : (savingGame ? '作成中…' : '試合開始')}
-            </button>
-            {gameId && (
-              <button className="btn gray" onClick={()=>{ localStorage.removeItem(LAST_GAME_KEY); setGameId(null); setGame(null); setPlays([]) }}>
-                この試合をリセット
-              </button>
-            )}
-          </div>
-          <div className="muted" style={{ marginTop: 8 }}>
-            ※ 作成後はブラウザを閉じても、直近の試合は自動復元されます（同一端末/ブラウザ）。
-          </div>
-        </div>
-
-        {/* 2) スコアボード（gameId がある時） */}
-        {gameId && (
-          <div className="card score">
-            <table className="scoreTbl">
-              <thead><tr><th></th><th>1Q</th><th>2Q</th><th>3Q</th><th>4Q</th><th>Total</th></tr></thead>
-              <tbody>
-                <tr><th>{homeName}</th><td>{board.H.Q1}</td><td>{board.H.Q2}</td><td>{board.H.Q3}</td><td>{board.H.Q4}</td><td>{board.H.Total}</td></tr>
-                <tr><th>{visitorName}</th><td>{board.V.Q1}</td><td>{board.V.Q2}</td><td>{board.V.Q3}</td><td>{board.V.Q4}</td><td>{board.V.Total}</td></tr>
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* 3) プレー入力（gameId がある時） */}
-        {gameId && (
-          <PlayEditor
-            gameId={gameId}
-            home={homeName}
-            visitor={visitorName}
-            plays={plays}
-            onSaved={loadPlays}
-          />
-        )}
-
-        {/* 4) プレイ一覧 + CSV */}
-        {gameId && (
-          <div className="card">
-            <PlaysTable plays={plays} home={homeName} visitor={visitorName} />
-          </div>
-        )}
-
-        <footer className="footer">
-          <CSVButton plays={plays} home={homeName} visitor={visitorName} />
-        </footer>
-
-        {loading && <div className="card">読み込み中…</div>}
-      </div>
-    </>
-  )
-}
-
-// ===== Editor =====
-function PlayEditor({ gameId, home, visitor, plays, onSaved }:
-  { gameId: string, home: string, visitor: string, plays: any[], onSaved: () => void }) {
-
-  const [p, setP] = useState<any>(blankPlay())
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
-
-  useEffect(() => {
-    if (isNum(p.gainYds) && isNum(p.toGo)) setP((s: any) => ({ ...s, fd: Number(s.gainYds) >= Number(s.toGo) }))
-  }, [p.gainYds, p.toGo])
-
-  const save = async () => {
-    setSaving(true)
-    try {
-      const base = { ...p, gameId, createdAt: p.createdAt || new Date().toISOString() }
-      if (editingId) {
-        await client.graphql({ query: UPDATE_PLAY, variables: { input: { ...base, id: editingId } }, authMode: 'iam' })
-      } else {
-        await client.graphql({ query: CREATE_PLAY, variables: { input: base }, authMode: 'iam' })
-      }
-      setP(blankPlay()); setEditingId(null); onSaved()
-    } catch (e: any) {
-      alert(e?.errors?.[0]?.message || e?.message || '保存に失敗しました')
-    } finally { setSaving(false) }
+  // 追加/更新/削除
+  const addOrUpdate = () => {
+    if (!state.home || !state.visitor) { alert('ホーム/ビジター名を入力してください'); return }
+    const base = { ...p, id: editingId ?? uuid(), createdAt: p.createdAt ?? new Date().toISOString() }
+    setState(s => {
+      const plays = editingId
+        ? s.plays.map(x => x.id === editingId ? base : x)
+        : [...s.plays, base]
+      return { ...s, plays }
+    })
+    setP(blankPlay()); setEditingId(null)
   }
-  const edit = (row: any) => { setEditingId(row.id); setP({ ...row }) }
-
-  return (
-    <div className="card">
-      <h3>プレー入力（1行単位）</h3>
-      <div className="grid4">
-        <Select label="Q" value={p.q} setValue={v => setP({ ...p, q: v })} options={['1Q','2Q','3Q','4Q','OT']} />
-        <Input label="時計" value={p.time} onChange={v => setP({ ...p, time: v })} type="time" />
-        <Select label="攻撃TEAM" value={p.attackTeam} setValue={v=>setP({...p, attackTeam:v})}
-          options={['home','visitor']} displayMap={{home:home, visitor:visitor}} />
-        <div className="block"><label>BALL ON</label>
-          <div className="row gap">
-            <Select label="" value={p.fieldPos} setValue={v=>setP({...p, fieldPos:v})} options={['H','V']} />
-            <Num label="" value={p.ballOn} setValue={v=>setP({...p, ballOn:v})} min={1} max={50}/>
-          </div>
-        </div>
-
-        <Select label="DOWN" value={p.down} setValue={v=>setP({...p, down:Number(v)})} options={['1','2','3','4']}/>
-        <Num label="TO GO" value={p.toGo} setValue={v=>setP({...p, toGo:v})} min={1} max={50}/>
-        <Select label="PLAYS" value={p.playType} setValue={v=>setP({...p, playType:v})}
-          options={['Run','Pass','Penalty','Kick off','Punt','Field goal','TFP(Kick)','TFP(Run)','TFP(Pass)','Spike/Knee down','Safety','Time out']} />
-        <Num label="獲得Y" value={p.gainYds} setValue={v=>setP({...p, gainYds:v})} allowNegative/>
-
-        <Check label="First down" checked={!!p.fd} setChecked={v=>setP({...p, fd:v})}/>
-        <Check label="Sack" checked={!!p.sack} setChecked={v=>setP({...p, sack:v})}/>
-        <Num label="PASSER #" value={p.passerNo} setValue={v=>setP({...p, passerNo:v})}/>
-        <Num label="RUNNER #" value={p.runnerNo} setValue={v=>setP({...p, runnerNo:v})}/>
-        <Num label="KICKER #" value={p.kickerNo} setValue={v=>setP({...p, kickerNo:v})}/>
-        <Num label="TACKLE BY #" value={p.tacklerNo} setValue={v=>setP({...p, tacklerNo:v})}/>
-        <Num label="TACKLE BY2 #" value={p.tacklerNo2} setValue={v=>setP({...p, tacklerNo2:v})}/>
-        <Num label="INT/PD #" value={p.interceptorNo} setValue={v=>setP({...p, interceptorNo:v})}/>
-        <Select label="TURNOVER" value={p.turnover} setValue={v=>setP({...p, turnover:v})}
-          options={['-','Intercept','Fumble','4th down失敗','Safety']}/>
-        <Num label="PENALTY Y" value={p.penaltyY} setValue={v=>setP({...p, penaltyY:v})}/>
-        <Select label="得点チーム" value={p.scoreTeam} setValue={v=>setP({...p, scoreTeam:v})}
-          options={['-','home','visitor']} displayMap={{'-':'-','home':home,'visitor':visitor}}/>
-        <Select label="得点方法" value={p.scoreMethod} setValue={v=>setP({...p, scoreMethod:v})}
-          options={['-','TD','FG','Safety','TFP(Kick)','TFP(Run)','TFP(Pass)']}/>
-        <div className="block" style={{gridColumn:'1 / -1'}}><label>備考</label>
-          <input className="input" value={p.remarks ?? ''} onChange={e=>setP({...p, remarks:e.target.value})}/>
-        </div>
-      </div>
-
-      <div className="row gap" style={{marginTop:12}}>
-        <button className="btn" onClick={save} disabled={saving} style={{minWidth:160}}>{editingId ? '変更を保存' : '1行追加'}</button>
-        {editingId && <button className="btn gray" onClick={()=>{ setEditingId(null); setP(blankPlay()) }}>取消</button>}
-        {editingId && <button className="btn danger" onClick={async ()=>{
-          if (!confirm('削除しますか？')) return
-          await client.graphql({ query: DELETE_PLAY, variables: { input:{ id: editingId } }, authMode:'iam' })
-          setEditingId(null); setP(blankPlay()); onSaved()
-        }}>行削除</button>}
-      </div>
-
-      <div className="space"/>
-      <SmallList plays={plays} onEdit={edit}/>
-    </div>
-  )
-}
-
-function SmallList({ plays, onEdit }: { plays:any[], onEdit:(row:any)=>void }) {
-  return (
-    <div className="miniTbl">
-      <div className="row head">
-        <div>Q</div><div>時計</div><div>攻撃</div><div>位置</div><div>DN</div><div>TG</div><div>PLAYS</div><div>Yds</div><div>FD</div><div></div>
-      </div>
-      {plays.slice(-8).reverse().map(p =>
-        <div key={p.id} className="row">
-          <div>{p.q}</div>
-          <div>{p.time}</div>
-          <div>{p.attackTeam}</div>
-          <div>{p.fieldPos}{p.ballOn}</div>
-          <div>{p.down}</div>
-          <div>{p.toGo}</div>
-          <div>{p.playType}{p.sack?' (Sack)':''}</div>
-          <div>{p.gainYds}</div>
-          <div>{p.fd?'Y':'N'}</div>
-          <div><button className="link" onClick={()=>onEdit(p)}>編集</button></div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function PlaysTable({ plays, home, visitor }:{ plays:any[], home:string, visitor:string }) {
-  return (
-    <>
-      <h3>プレー一覧（最新が上）</h3>
-      <div className="tableWrap">
-        <table className="table">
-          <thead><tr>
-            <th>Q</th><th>時計</th><th>攻撃</th><th>位置</th><th>DN</th><th>TG</th><th>PLAYS</th><th>Yds</th><th>FD</th><th>備考</th><th>得点チーム</th><th>得点方法</th>
-          </tr></thead>
-          <tbody>
-            {[...plays].reverse().map(p =>
-              <tr key={p.id}>
-                <td>{p.q}</td>
-                <td>{p.time}</td>
-                <td>{p.attackTeam==='home'?home: p.attackTeam==='visitor'?visitor: p.attackTeam}</td>
-                <td>{p.fieldPos}{p.ballOn}</td>
-                <td>{p.down}</td>
-                <td>{p.toGo}</td>
-                <td>{p.playType}{p.sack?' (Sack)':''}</td>
-                <td>{p.gainYds}</td>
-                <td>{p.fd?'Y':'N'}</td>
-                <td>{p.remarks}</td>
-                <td>{p.scoreTeam==='home'?home: p.scoreTeam==='visitor'?visitor: '-'}</td>
-                <td>{p.scoreMethod||'-'}</td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-    </>
-  )
-}
-
-function CSVButton({ plays, home, visitor }:{ plays:any[], home:string, visitor:string }) {
-  const click = () => {
-    const header = ['Q','時刻','攻撃TEAM','BALL ON','DOWN','TO GO','PLAYS','獲得Y','FD','TACKLE BY','TACKLE BY2','INT/PD','PENALTYY','REMARKS','得点(H/V)','得点方法']
-    const rows = plays.map(p => [
-      p.q, p.time,
-      p.attackTeam==='home'?home: p.attackTeam==='visitor'?visitor: p.attackTeam,
-      `${p.fieldPos}${p.ballOn ?? ''}`,
-      p.down ?? '',
-      p.toGo ?? '',
-      p.playType + (p.sack?' (Sack)':''),
-      p.gainYds ?? '',
-      p.fd ? '○' : '',
-      p.tacklerNo ?? '',
-      p.tacklerNo2 ?? '',
-      p.interceptorNo ?? '',
-      p.penaltyY ?? '',
-      p.remarks ?? '',
-      p.scoreTeam==='home'?'H': p.scoreTeam==='visitor'?'V':'',
-      p.scoreMethod ?? ''
-    ])
-    const csv = [header, ...rows]
-      .map(r => r.map(s => `"${String(s ?? '').replace(/"/g,'""')}"`).join(','))
-      .join('\r\n')
-    const blob = new Blob([csv], { type:'text/csv;charset=utf-8;' })
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(blob)
-    a.download = `game_${new Date().toISOString().slice(0,10)}.csv`
-    a.click()
+  const edit = (row: Play) => { setP({...row}); setEditingId(row.id) }
+  const remove = (id: string) => {
+    if (!confirm('この行を削除しますか？')) return
+    setState(s => ({ ...s, plays: s.plays.filter(x => x.id !== id) }))
+    if (editingId === id) { setP(blankPlay()); setEditingId(null) }
   }
-  return <button className="btn gray" onClick={click}>CSV出力</button>
-}
-
-// ---- tiny inputs ----
-function Input({ label, value, onChange, type='text' }:{ label:string, value:any, onChange:(v:string)=>void, type?:string }) {
-  return (<div className="block"><label>{label}</label><input className="input" type={type} value={value ?? ''} onChange={e=>onChange(e.target.value)} /></div>)
-}
-function Num({ label, value, setValue, min, max, allowNegative }:
-  { label:string, value:any, setValue:(n:number|null)=>void, min?:number, max?:number, allowNegative?:boolean }) {
-  return (
-    <div className="block">
-      <label>{label}</label>
-      <input className="input" inputMode="numeric" value={value ?? ''} onChange={e=>{
-        const t = e.target.value
-        if (t===''){ setValue(null); return }
-        const n = Number(t); if (Number.isNaN(n)) return
-        if (!allowNegative && n < 0) return
-        if (min!=null && n<min) { setValue(min); return }
-        if (max!=null && n>max) { setValue(max); return }
-        setValue(n)
-      }}/>
-    </div>
-  )
-}
-function Check({ label, checked, setChecked }:{ label:string, checked:boolean, setChecked:(v:boolean)=>void }) {
-  return (
-    <label className="check"><input type="checkbox" checked={checked} onChange={e=>setChecked(e.target.checked)}/><span>{label}</span></label>
-  )
-}
-function Select({ label, value, setValue, options, displayMap }:
-  { label:string, value:any, setValue:(v:any)=>void, options:(string|number)[], displayMap?:Record<string,string> }) {
-  return (
-    <div className="block">
-      <label>{label}</label>
-      <select className="input" value={String(value ?? options[0])} onChange={e=>setValue(e.target.value)}>
-        {options.map(o => <option key={String(o)} value={String(o)}>{displayMap?.[String(o)] ?? String(o)}</option>)}
-      </select>
-    </div>
-  )
-}
-function Header({ title, subtitle }:{ title:string, subtitle:string }) {
-  return (
-    <div className="header">
-      <div className="title">{title}<br/>{subtitle}</div>
-      <div className="icons">
-        <a className="icon" onClick={()=>navigator.clipboard.writeText(location.href)} title="URLコピー">⎘</a>
-      </div>
-    </div>
-  )
-}
-function blankPlay(){ return {
-  q:'1Q', time:'12:00', attackTeam:'home', fieldPos:'H', ballOn:null, toGo:null, down:1,
-  gainYds:null, playType:'', fd:false, sack:false,
-  passerNo:'', runnerNo:'', kickerNo:'',
-  tacklerNo:'', tacklerNo2:'', interceptorNo:'',
-  turnover:'-', penaltyY:null, remarks:'', scoreTeam:'-', scoreMethod:'-'
-}}
-
-// ===== Dark Styles =====
-function Style(){
-  return (<style>{`
-:root { --bg:#0a0d12; --card:#121821; --fg:#eaf0f5; --muted:#9fb2c3; --pri:#0ea5a4; --danger:#c23636; }
-*{ box-sizing:border-box; } 
-html, body, #root { height:100%; background:var(--bg) !important; }
-body{ margin:0; color:var(--fg); font:16px/1.6 "Meiryo UI","Segoe UI",system-ui; }
-
-.page{ max-width:1100px; margin:0 auto; padding:16px; }
-.header{ display:flex; justify-content:space-between; align-items:center; margin:8px 0 16px; }
-.title{ font-weight:800; font-size:28px; line-height:1.2; }
-.icons .icon{ display:inline-block; margin-left:10px; padding:8px 10px; background:#2b3746; color:#fff; border-radius:10px; cursor:pointer; }
-
-.card{ background:var(--card); border-radius:16px; padding:16px; margin:12px 0; box-shadow:0 8px 24px rgba(0,0,0,.25); }
-.row{ display:flex; align-items:center; } .between{ justify-content:space-between; } .gap{ gap:12px; }
-.grid2{ display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-.grid4{ display:grid; grid-template-columns:repeat(4,1fr); gap:12px; }
-@media (max-width:860px){ .grid2{ grid-template-columns:1fr; } .grid4{ grid-template-columns:1fr 1fr; } .title{font-size:22px;} }
-
-.block{ display:flex; flex-direction:column; gap:6px; }
-.input{ width:100%; border:1px solid #324153; background:#0f141b; color:#fff; padding:10px 12px; border-radius:12px; }
-.btn{ background:var(--pri); color:#fff; border:none; padding:12px 18px; border-radius:12px; cursor:pointer; font-weight:700; }
-.btn.gray{ background:#2b3746; } .btn.danger{ background:var(--danger); }
-.space{ height:12px; } .muted{ color:var(--muted); }
-
-.miniTbl{ border-top:1px solid #2c3a4a; margin-top:10px; }
-.miniTbl .row{ display:grid; grid-template-columns:60px 70px 70px 90px 50px 60px 1fr 60px 40px 70px; gap:8px; padding:6px 0; border-bottom:1px solid #203041; align-items:center; }
-.miniTbl .head{ color:var(--muted); font-weight:700; }
-.link{ color:#a7e0ff; background:none; border:none; cursor:pointer; text-decoration:underline; }
-
-.tableWrap{ overflow:auto; }
-table.table{ width:100%; border-collapse:collapse; background:#0f141b; }
-table.table th, table.table td{ border-bottom:1px solid #233042; padding:8px 10px; text-align:left; }
-table.table th{ color:var(--muted); font-weight:700; }
-
-.footer{ display:flex; justify-content:center; gap:16px; }
-.scoreTbl{ width:100%; border-collapse:collapse; background:#0f141b; }
-.scoreTbl th, .scoreTbl td{ border-bottom:1px solid #263648; padding:6px 8px; text-align:center; }
-.scoreTbl th:first-child, .scoreTbl td:first-child{ text-align:left; }
-
-.check{ display:flex; align-items:center; gap:8px; }
-`}</style>)
-}
+  const resetAll = () => {
+    if (!confirm('現在の内容をすべてリセット
