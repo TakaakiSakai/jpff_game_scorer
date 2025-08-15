@@ -29,40 +29,48 @@ function App({ signOut, user }: WithAuthenticatorProps) {
 
   // CSV出力（簡易）
   function downloadCSV() {
+    // 1) ヘッダは string[]（1行分）
     const headers: string[] = [
       'date','venue','home','away',
       'q1H','q1A','q2H','q2A','q3H','q3A','q4H','q4A',
       'otH','otA','finalH','finalA','notes'
     ];
   
+    // 2) rows は「行の配列」= string[][]（各行が string[]）
     const rows: string[][] = games.map(g => {
-      const home = teams.find(t=>t.id===g.homeTeamID)?.name ?? '';
-      const away = teams.find(t=>t.id===g.awayTeamID)?.name ?? '';
-      const toS = (v: unknown) => String(v ?? '');
+      const home = teams.find(t => t.id === g.homeTeamID)?.name ?? '';
+      const away = teams.find(t => t.id === g.awayTeamID)?.name ?? '';
+  
+      const n = (v?: number) => (v ?? 0).toString();
+      const s = (v?: string | null) => (v ?? '');
   
       const finalH = (g.finalHome ?? (
         (g.q1Home ?? 0)+(g.q2Home ?? 0)+(g.q3Home ?? 0)+(g.q4Home ?? 0)+(g.otHome ?? 0)
-      ));
+      )).toString();
+  
       const finalA = (g.finalAway ?? (
         (g.q1Away ?? 0)+(g.q2Away ?? 0)+(g.q3Away ?? 0)+(g.q4Away ?? 0)+(g.otAway ?? 0)
-      ));
+      )).toString();
   
       return [
-        toS(g.date),
-        toS(g.venue),
+        s(g.date),
+        s(g.venue),
         home,
         away,
-        toS(g.q1Home), toS(g.q1Away),
-        toS(g.q2Home), toS(g.q2Away),
-        toS(g.q3Home), toS(g.q3Away),
-        toS(g.q4Home), toS(g.q4Away),
-        toS(g.otHome),  toS(g.otAway),
-        toS(finalH),    toS(finalA),
-        toS((g.notes ?? '').toString().replaceAll('\n',' '))
+        n(g.q1Home), n(g.q1Away),
+        n(g.q2Home), n(g.q2Away),
+        n(g.q3Home), n(g.q3Away),
+        n(g.q4Home), n(g.q4Away),
+        n(g.otHome), n(g.otAway),
+        finalH, finalA,
+        s(g.notes).replaceAll('\n',' ')
       ];
     });
   
-    const csv = [headers, ...rows].map(r => r.join(',')).join('\n');
+    // 3) CSV文字列は「各行を , で join → 全体を \n で join」
+    const csv = [headers, ...rows].map(line => line.join(',')).join('\n');
+  
+    // 4) ダウンロード
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -71,6 +79,7 @@ function App({ signOut, user }: WithAuthenticatorProps) {
     a.click();
     URL.revokeObjectURL(url);
   }
+  
   
 
   return (
