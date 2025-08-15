@@ -1,17 +1,15 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-// App.tsx — Dark UI + full play editor, team names are local only.
+// App.tsx — No sign-in required. Full editor + CSV. Team names are local only.
 
 import React, { useEffect, useMemo, useState } from 'react'
 import { BrowserRouter, Routes, Route, Link, useNavigate, useParams } from 'react-router-dom'
-import { Authenticator } from '@aws-amplify/ui-react'
-import '@aws-amplify/ui-react/styles.css'
+import '@aws-amplify/ui-react/styles.css' // スタイルだけ利用（Authenticatorは使わない）
 import { generateClient } from 'aws-amplify/api'
-import { getCurrentUser } from 'aws-amplify/auth'
 
 // ===== Amplify client =====
 const client = generateClient()
 
-// ===== GraphQL (Game/Play only. Team is NOT used.) =====
+// ===== GraphQL (Game/Play only. Team is使わない) =====
 const GET_GAME = /* GraphQL */ `
   query GetGame($id: ID!) {
     getGame(id: $id) { id date venue home homeTeamID awayTeamID status editToken }
@@ -106,7 +104,7 @@ const ON_UPDATE_PLAY = /* GraphQL */ `
   } }
 `
 
-// ===== Local team-name store (browser localStorage) =====
+// ===== Local team-name store (ブラウザ localStorage) =====
 type LocalNames = { home?: string; visitor?: string }
 const LS_KEY = (gameId: string) => `jpff:gameNames:${gameId}`
 const setLocalNames = (gameId: string, names: LocalNames) =>
@@ -135,36 +133,24 @@ export default function App() {
   return (
     <>
       <Style />
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/setup" element={<Setup />} />
-          <Route path="/game/:id" element={<Game />} />
-          <Route path="*" element={<NF />} />
-        </Routes>
-      </BrowserRouter>
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/setup" element={<Setup />} />
+        <Route path="/game/:id" element={<Game />} />
+        <Route path="*" element={<NF />} />
+      </Routes>
+    </BrowserRouter>
     </>
   )
 }
 
 // ===== Home =====
 function Home() {
-  const [signedIn, setSignedIn] = useState(false)
-  useEffect(() => { (async () => { try { await getCurrentUser(); setSignedIn(true) } catch { setSignedIn(false) } })() }, [])
   return (
     <div className="page">
       <Header title="【JPFF East】" subtitle="Game Scorer" />
       <div className="card">
-        {!signedIn && (
-          <>
-            <h3>サインイン / ユーザー作成</h3>
-            <div style={{ marginTop: 10 }}>
-              {/* colorMode は使わず、CSS でダーク化 */}
-              <Authenticator signUpAttributes={['email']} />
-            </div>
-            <div className="space" />
-          </>
-        )}
         <div className="row gap">
           <Link className="btn" to="/setup">試合を作成</Link>
         </div>
@@ -181,14 +167,9 @@ function Setup() {
   const [home, setHome] = useState('')
   const [visitor, setVisitor] = useState('')
   const [saving, setSaving] = useState(false)
-  const [signedIn, setSignedIn] = useState(false)
-  const [showAuth, setShowAuth] = useState(false)
-
-  useEffect(() => { (async () => { try { await getCurrentUser(); setSignedIn(true) } catch { setSignedIn(false) } })() }, [])
 
   const createGame = async () => {
     if (!home || !visitor) { alert('ホーム / ビジター を入力してください'); return }
-    if (!signedIn) { setShowAuth(true); return }
     setSaving(true)
     try {
       const input = {
@@ -197,7 +178,7 @@ function Setup() {
         awayTeamID: 'V_' + uuid(),
         status: 'scheduled'
       }
-      const r: any = await client.graphql({ query: CREATE_GAME_BY_TEAMID, variables: { input }, authMode: 'userPool' })
+      const r: any = await client.graphql({ query: CREATE_GAME_BY_TEAMID, variables: { input }, authMode: 'iam' })
       const id = r?.data?.createGame?.id
       if (!id) throw new Error('createGame failed')
       setLocalNames(id, { home, visitor })
@@ -211,7 +192,7 @@ function Setup() {
     <div className="page">
       <Header title="【JPFF East】" subtitle="Game Scorer" />
       <div className="card">
-        <h2>試合作成（サインインが必要）</h2>
+        <h2>試合作成（サインイン不要）</h2>
         <div className="grid2">
           <div className="block"><label>試合日</label>
             <input className="input" type="date" value={date} onChange={e => setDate(e.target.value)} />
@@ -231,22 +212,6 @@ function Setup() {
         <div className="space" />
         <Link className="muted" to="/">&laquo; トップへ</Link>
       </div>
-
-      {showAuth && (
-        <div className="modal">
-          <div className="card" style={{ width: 'min(620px,92vw)' }}>
-            <div className="row between">
-              <h3>サインイン / ユーザー作成</h3>
-              <button className="btn gray" onClick={() => setShowAuth(false)}>閉じる</button>
-            </div>
-            <div style={{ marginTop: 12 }}>
-              <Authenticator signUpAttributes={['email']}>
-                {({ user }) => { if (user) { setShowAuth(false) } return null }}
-              </Authenticator>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
@@ -254,17 +219,15 @@ function Setup() {
 // ===== Game =====
 function Game() {
   const { id: gameId } = useParams()
-  const [signedIn, setSignedIn] = useState(false)
   const [game, setGame] = useState<any>(null)
   const [plays, setPlays] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => { (async () => { try { await getCurrentUser(); setSignedIn(true) } catch { setSignedIn(false) } })() }, [])
   const names = useMemo(() => gameId ? getLocalNames(gameId) : {}, [gameId])
   const homeName = game?.home || names.home || 'Home'
   const visitorName = game?.visitor || names.visitor || 'Visitor'
 
-  // Game fetch
+  // Game 取得
   useEffect(() => {
     if (!gameId) return
     let cancelled = false
@@ -273,29 +236,23 @@ function Game() {
       try {
         const r: any = await client.graphql({ query: GET_GAME, variables: { id: gameId }, authMode: 'iam' })
         if (!cancelled) setGame(r?.data?.getGame || null)
-      } catch {
-        try {
-          const r: any = await client.graphql({ query: GET_GAME, variables: { id: gameId }, authMode: 'userPool' })
-          if (!cancelled) setGame(r?.data?.getGame || null)
-        } catch { /* ignore */ }
-      } finally { if (!cancelled) setLoading(false) }
+      } catch { /* ignore */ }
+      finally { if (!cancelled) setLoading(false) }
     })()
     return () => { cancelled = true }
   }, [gameId])
 
-  // Plays fetch
+  // Plays 取得
   const loadPlays = async () => {
     if (!gameId) return
     try {
       const r: any = await client.graphql({
-        query: LIST_PLAYS_BY_GAME, variables: { gameId, sortDirection: 'ASC' },
-        authMode: signedIn ? 'userPool' : 'iam'
+        query: LIST_PLAYS_BY_GAME, variables: { gameId, sortDirection: 'ASC' }, authMode: 'iam'
       })
       setPlays(r?.data?.listPlaysByGame?.items || [])
     } catch {
       const r: any = await client.graphql({
-        query: LIST_PLAYS_FALLBACK, variables: { filter: { gameId: { eq: gameId } }, limit: 1000 },
-        authMode: signedIn ? 'userPool' : 'iam'
+        query: LIST_PLAYS_FALLBACK, variables: { filter: { gameId: { eq: gameId } }, limit: 1000 }, authMode: 'iam'
       })
       const items = (r?.data?.listPlays?.items || []).sort((a: any, b: any) =>
         (a.createdAt || '').localeCompare(b.createdAt || '')
@@ -303,12 +260,11 @@ function Game() {
       setPlays(items)
     }
   }
-  useEffect(() => { loadPlays() }, [gameId, signedIn])
+  useEffect(() => { loadPlays() }, [gameId])
 
-  // Subscriptions
+  // サブスク（認証なしで動く設定前提）
   useEffect(() => {
-    const mode = signedIn ? 'userPool' : 'iam'
-    const s1: any = (client.graphql({ query: ON_CREATE_PLAY, authMode: mode }) as any).subscribe?.({
+    const s1: any = (client.graphql({ query: ON_CREATE_PLAY, authMode: 'iam' }) as any).subscribe?.({
       next: ({ data }: any) => {
         const p = data?.onCreatePlay
         if (p?.gameId !== gameId) return
@@ -317,15 +273,15 @@ function Game() {
         ))
       }
     })
-    const s2: any = (client.graphql({ query: ON_UPDATE_PLAY, authMode: mode }) as any).subscribe?.({
+    const s2: any = (client.graphql({ query: ON_UPDATE_PLAY, authMode: 'iam' }) as any).subscribe?.({
       next: ({ data }: any) => {
         const p = data?.onUpdatePlay
         if (p?.gameId !== gameId) return
         setPlays(prev => prev.map(x => x.id === p.id ? { ...x, ...p } : x))
       }
     })
-    return () => { try { s1?.unsubscribe?.() } catch { } try { s2?.unsubscribe?.() } catch { } }
-  }, [gameId, signedIn])
+    return () => { try { s1?.unsubscribe?.() } catch {} try { s2?.unsubscribe?.() } catch {} }
+  }, [gameId])
 
   const board = useMemo(() => {
     const blank = { Q1: 0, Q2: 0, Q3: 0, Q4: 0, Total: 0 }
@@ -360,6 +316,7 @@ function Game() {
         </table>
       </div>
 
+      {/* 元UIフル（備考含む） */}
       <PlayEditor gameId={game.id} home={homeName} visitor={visitorName} plays={plays} onSaved={loadPlays} />
 
       <div className="card">
@@ -374,7 +331,7 @@ function Game() {
   )
 }
 
-// ===== Editor (full fields) =====
+// ===== Editor =====
 function PlayEditor({ gameId, home, visitor, plays, onSaved }:
   { gameId: string, home: string, visitor: string, plays: any[], onSaved: () => void }) {
 
@@ -391,9 +348,9 @@ function PlayEditor({ gameId, home, visitor, plays, onSaved }:
     try {
       const base = { ...p, gameId, createdAt: p.createdAt || new Date().toISOString() }
       if (editingId) {
-        await client.graphql({ query: UPDATE_PLAY, variables: { input: { ...base, id: editingId } }, authMode: 'userPool' })
+        await client.graphql({ query: UPDATE_PLAY, variables: { input: { ...base, id: editingId } }, authMode: 'iam' })
       } else {
-        await client.graphql({ query: CREATE_PLAY, variables: { input: base }, authMode: 'userPool' })
+        await client.graphql({ query: CREATE_PLAY, variables: { input: base }, authMode: 'iam' })
       }
       setP(blankPlay()); setEditingId(null); onSaved()
     } catch (e: any) {
@@ -448,7 +405,7 @@ function PlayEditor({ gameId, home, visitor, plays, onSaved }:
         {editingId && <button className="btn gray" onClick={()=>{ setEditingId(null); setP(blankPlay()) }}>取消</button>}
         {editingId && <button className="btn danger" onClick={async ()=>{
           if (!confirm('削除しますか？')) return
-          await client.graphql({ query: DELETE_PLAY, variables: { input:{ id: editingId } }, authMode:'userPool' })
+          await client.graphql({ query: DELETE_PLAY, variables: { input:{ id: editingId } }, authMode:'iam' })
           setEditingId(null); setP(blankPlay()); onSaved()
         }}>行削除</button>}
       </div>
@@ -591,12 +548,6 @@ function Header({ title, subtitle }:{ title:string, subtitle:string }) {
       <div className="title">{title}<br/>{subtitle}</div>
       <div className="icons">
         <a className="icon" onClick={()=>navigator.clipboard.writeText(location.href)} title="URLコピー">⎘</a>
-        <Authenticator>
-          {({ signOut, user }) => user
-            ? <a className="icon" onClick={signOut} title="サインアウト">⇦</a>
-            : <span />
-          }
-        </Authenticator>
       </div>
     </div>
   )
@@ -610,7 +561,7 @@ function blankPlay(){ return {
   turnover:'-', penaltyY:null, remarks:'', scoreTeam:'-', scoreMethod:'-'
 }}
 
-// ===== Dark Styles (Amplify UI も黒に) =====
+// ===== Dark Styles =====
 function Style(){
   return (<style>{`
 :root { --bg:#0a0d12; --card:#121821; --fg:#eaf0f5; --muted:#9fb2c3; --pri:#0ea5a4; --danger:#c23636; }
@@ -651,19 +602,5 @@ table.table th{ color:var(--muted); font-weight:700; }
 .scoreTbl th:first-child, .scoreTbl td:first-child{ text-align:left; }
 
 .check{ display:flex; align-items:center; gap:8px; }
-
-/* Modal */
-.modal{ position:fixed; inset:0; display:grid; place-items:center; background:rgba(0,0,0,.7); z-index:1000; }
-
-/* Amplify UI をダークに塗りつぶし（colorMode 不要） */
-.amplify-authenticator, .amplify-card, .amplify-flex, .amplify-view {
-  --amplify-colors-background-primary: #0a0d12;
-  --amplify-colors-background-secondary: #121821;
-  --amplify-colors-font-primary: #eaf0f5;
-  --amplify-components-fieldcontrol-color: #eaf0f5;
-  --amplify-components-button-primary-background-color: #0ea5a4;
-  background:#0a0d12 !important;
-  color:#eaf0f5 !important;
-}
 `}</style>)
 }
