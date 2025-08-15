@@ -1,36 +1,38 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { Link, Routes, Route, useNavigate, useParams, useLocation, BrowserRouter } from 'react-router-dom'
-import { Button, TextField, Authenticator, View } from '@aws-amplify/ui-react'
+// App.tsx（完成版）
+
+import React, { useEffect, useMemo, useState } from 'react'
+import { Link, Routes, Route, BrowserRouter, useNavigate, useParams } from 'react-router-dom'
+import { Authenticator, TextField } from '@aws-amplify/ui-react'
 import '@aws-amplify/ui-react/styles.css'
 import { generateClient } from 'aws-amplify/api'
 import { getCurrentUser } from 'aws-amplify/auth'
 
-// ===================== Amplify client =====================
+// =============== Amplify client ===============
 const client = generateClient()
 
-// ---------- GraphQL ----------
+// =============== GraphQL ===============
+
+// --- Game 取得 / 作成（名前方式）
 const GET_GAME = /* GraphQL */ `
   query GetGame($id: ID!) {
-    getGame(id: $id) {
-      id date venue home visitor status editToken
-    }
+    getGame(id: $id) { id date venue home visitor homeTeamID awayTeamID status editToken }
   }
 `
 
 const CREATE_GAME = /* GraphQL */ `
   mutation CreateGame($input: CreateGameInput!) {
-    createGame(input: $input) { id date venue home visitor status editToken }
+    createGame(input: $input) { id date venue home visitor homeTeamID awayTeamID status editToken }
   }
 `
 
 const UPDATE_GAME = /* GraphQL */ `
   mutation UpdateGame($input: UpdateGameInput!) {
-    updateGame(input: $input) { id date venue home visitor status editToken }
+    updateGame(input: $input) { id date venue home visitor homeTeamID awayTeamID status editToken }
   }
 `
 
-// listPlaysByGame がある前提（@index）。なければ listPlays にフォールバック
+// --- listPlaysByGame が無い場合に備えてフォールバックも用意
 const LIST_PLAYS_BY_GAME = /* GraphQL */ `
   query ListPlaysByGame($gameId: ID!, $sortDirection: ModelSortDirection) {
     listPlaysByGame(gameId: $gameId, sortDirection: $sortDirection) {
@@ -127,10 +129,29 @@ const ON_UPDATE_PLAY = /* GraphQL */ `
   }
 `
 
-// ===================== helpers =====================
-const isNum = (v: any) => v !== null && v !== undefined && v !== '' && !isNaN(Number(v))
-const num = (v: any, d: number | null = null) => (isNum(v) ? Number(v) : d)
+// --- 追加: チームID方式でのGame作成 + Team検索/作成
+const CREATE_GAME_BY_TEAMID = /* GraphQL */ `
+  mutation CreateGame($input: CreateGameInput!) {
+    createGame(input: $input) { id date venue homeTeamID awayTeamID status editToken }
+  }
+`
 
+const LIST_TEAMS_BY_NAME = /* GraphQL */ `
+  query ListTeams($name: String!) {
+    listTeams(filter: { name: { eq: $name } }, limit: 1) {
+      items { id name }
+    }
+  }
+`
+
+const CREATE_TEAM = /* GraphQL */ `
+  mutation CreateTeam($input: CreateTeamInput!) {
+    createTeam(input: $input) { id name }
+  }
+`
+
+// =============== helpers ===============
+const isNum = (v: any) => v !== null && v !== undefined && v !== '' && !isNaN(Number(v))
 const scorePoints = (method?: string) => {
   switch (method) {
     case 'TD': return 6
@@ -142,10 +163,33 @@ const scorePoints = (method?: string) => {
     default: return 0
   }
 }
-
 const to2 = (n: number) => (n < 10 ? `0${n}` : `${n}`)
 
-// ===================== Root =====================
+// 名前から Team の id を取得（なければ作成）
+async function getOrCreateTeamId(name: string): Promise<string> {
+  if (!name) throw new Error('team name required')
+  // 既存検索
+  try {
+    const r: any = await client.graphql({
+      query: LIST_TEAMS_BY_NAME,
+      variables: { name },
+      authMode: 'userPool',
+    })
+    const hit = r?.data?.listTeams?.items?.[0]
+    if (hit?.id) return hit.id
+  } catch { /* 検索失敗は作成へ */ }
+  // 新規作成
+  const c: any = await client.graphql({
+    query: CREATE_TEAM,
+    variables: { input: { name } },
+    authMode: 'userPool',
+  })
+  const id = c?.data?.createTeam?.id
+  if (!id) throw new Error('createTeam failed')
+  return id
+}
+
+// =============== Root ===============
 export default function App() {
   return (
     <>
@@ -162,27 +206,47 @@ export default function App() {
   )
 }
 
-// ===================== Home =====================
+// =============== Home（トップ：サインイン/サインアップ） ===============
 function Home() {
+  const [signedIn, setSignedIn] = useState(false)
+  const [checking, setChecking] = useState(true)
   const qs = new URLSearchParams(location.search)
   const gid = qs.get('id')
+
+  useEffect(() => {
+    (async () => {
+      try { await getCurrentUser(); setSignedIn(true) } catch { setSignedIn(false) }
+      finally { setChecking(false) }
+    })()
+  }, [])
+
   return (
     <div className="page">
       <Header title="【JPFF East】" subtitle="Game Scorer" />
       <div className="card">
-        <div className="stack">
-          <p>試合URLを共有すると、ログイン済みユーザーは「編集」、未ログインは「参照」で閲覧できます。</p>
-          <div className="row gap">
-            <Link className="btn gray" to="/setup">試合を作成</Link>
-            {gid && <Link className="btn" to={`/game/${gid}`}>試合へ移動</Link>}
+        {!checking && !signedIn ? (
+          <>
+            <h2>サインイン / ユーザー作成</h2>
+            <p className="muted" style={{marginTop:4}}>ログインすると試合作成・編集ができます。</p>
+            <div style={{marginTop:12}}>
+              <Authenticator signUpAttributes={['email']} />
+            </div>
+          </>
+        ) : (
+          <div className="stack">
+            <p>試合URLを共有すると、ログイン済みユーザーは「編集」、未ログインは「参照」で閲覧できます。</p>
+            <div className="row gap">
+              <Link className="btn gray" to="/setup">試合を作成</Link>
+              {gid && <Link className="btn" to={`/game/${gid}`}>試合へ移動</Link>}
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   )
 }
 
-// ===================== Setup =====================
+// =============== Setup（試合作成：フォールバック付き） ===============
 function Setup() {
   const nav = useNavigate()
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10))
@@ -190,56 +254,110 @@ function Setup() {
   const [home, setHome] = useState('')
   const [visitor, setVisitor] = useState('')
   const [saving, setSaving] = useState(false)
+  const [signedIn, setSignedIn] = useState(false)
+  const [showAuth, setShowAuth] = useState(false)
+
+  useEffect(() => {
+    (async () => { try { await getCurrentUser(); setSignedIn(true) } catch { setSignedIn(false) } })()
+  }, [])
+
+  async function createGame() {
+    if (!home || !visitor) { alert('ホーム/ビジターを入力してください'); return }
+    if (!signedIn) { setShowAuth(true); return }
+
+    setSaving(true)
+    try {
+      // ① 名前方式で試行
+      try {
+        const res: any = await client.graphql({
+          query: CREATE_GAME,
+          variables: { input: { date, venue, home, visitor, status: 'scheduled' } },
+          authMode: 'userPool',
+        })
+        const id = res?.data?.createGame?.id
+        if (id) { nav(`/game/${id}`); return }
+        throw new Error('createGame returned no id')
+      } catch {
+        // ② 失敗 → ID方式で再試行（必要ならTeam自動作成）
+        const homeTeamID = await getOrCreateTeamId(home)
+        const awayTeamID = await getOrCreateTeamId(visitor)
+        const r2: any = await client.graphql({
+          query: CREATE_GAME_BY_TEAMID,
+          variables: { input: { date, venue, homeTeamID, awayTeamID, status: 'scheduled' } },
+          authMode: 'userPool',
+        })
+        const id2 = r2?.data?.createGame?.id
+        if (id2) { nav(`/game/${id2}`); return }
+        throw new Error('createGame(by team id) returned no id')
+      }
+    } catch (e: any) {
+      const msg = e?.errors?.[0]?.message || e?.message || '作成に失敗しました'
+      alert(msg)
+    } finally {
+      setSaving(false)
+    }
+  }
 
   return (
     <div className="page">
       <Header title="【JPFF East】" subtitle="Game Scorer" />
       <div className="card">
         <h2>試合作成（サインインが必要）</h2>
+
+        {/* 入力は常に可能 */}
         <div className="grid2">
-          <TextField label="試合日" type="date" value={date} onChange={e => setDate(e.target.value)} />
-          <TextField label="会場" value={venue} onChange={e => setVenue(e.target.value)} />
-          <TextField label="ホーム" value={home} onChange={e => setHome(e.target.value)} />
-          <TextField label="ビジター" value={visitor} onChange={e => setVisitor(e.target.value)} />
+          <div className="block">
+            <label>試合日</label>
+            <input className="input" type="date" value={date} onChange={(e)=>setDate(e.target.value)} />
+          </div>
+          <div className="block">
+            <label>会場</label>
+            <input className="input" value={venue} onChange={(e)=>setVenue(e.target.value)} />
+          </div>
+          <div className="block">
+            <label>ホーム</label>
+            <input className="input" value={home} onChange={(e)=>setHome(e.target.value)} />
+          </div>
+          <div className="block">
+            <label>ビジター</label>
+            <input className="input" value={visitor} onChange={(e)=>setVisitor(e.target.value)} />
+          </div>
         </div>
+
         <div className="space" />
-        <Authenticator>
-          {() => (
-            <Button
-              variation="primary"
-              isLoading={saving}
-              onClick={async () => {
-                if (!home || !visitor) { alert('ホーム/ビジターを入力'); return }
-                setSaving(true)
-                try {
-                  const res: any = await client.graphql({
-                    query: CREATE_GAME,
-                    variables: { input: { date, venue, home, visitor, status: 'scheduled' } },
-                    authMode: 'userPool'
-                  })
-                  const id = res?.data?.createGame?.id
-                  if (id) nav(`/game/${id}`)
-                  else alert('作成に失敗しました')
-                } catch (e: any) {
-                  alert(e?.errors?.[0]?.message || e?.message || '作成失敗')
-                } finally {
-                  setSaving(false)
-                }
-              }}
-            >作成</Button>
-          )}
-        </Authenticator>
+        <button className="btn" onClick={createGame} disabled={saving}>
+          {saving ? '作成中…' : '作成'}
+        </button>
         <div className="space" />
         <Link className="muted" to="/">&laquo; トップへ</Link>
       </div>
+
+      {/* 未ログインで「作成」を押したときのモーダル */}
+      {showAuth && (
+        <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'grid', placeItems:'center', zIndex:1000}}>
+          <div className="card" style={{width:'min(600px, 92vw)'}}>
+            <div className="row between">
+              <h3>サインイン / ユーザー作成</h3>
+              <button className="btn gray" onClick={()=>setShowAuth(false)}>閉じる</button>
+            </div>
+            <div style={{marginTop:12}}>
+              <Authenticator signUpAttributes={['email']}>
+                {({ user }) => {
+                  if (user && showAuth) { setSignedIn(true); setShowAuth(false) }
+                  return null
+                }}
+              </Authenticator>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
-// ===================== Game =====================
+// =============== Game（閲覧/編集） ===============
 function Game() {
   const { id: gameId } = useParams()
-  const nav = useNavigate()
   const [signedIn, setSignedIn] = useState(false)
   const [game, setGame] = useState<any>(null)
   const [loading, setLoading] = useState(true)
@@ -254,7 +372,7 @@ function Game() {
     })()
   }, [])
 
-  // Game を取得 (IAM→UserPool フォールバック)
+  // Game 取得（IAM→UserPool）
   useEffect(() => {
     if (!gameId) return
     let cancelled = false
@@ -283,7 +401,7 @@ function Game() {
     return () => { cancelled = true }
   }, [gameId])
 
-  // 編集モード：クエリパラメータ token / localStorage
+  // 編集モード：token クエリ/LocalStorage
   useEffect(() => {
     const qs = new URLSearchParams(location.search)
     const t = qs.get('token') || localStorage.getItem(`editToken:${gameId}`)
@@ -315,9 +433,9 @@ function Game() {
       setPlays(items)
     }
   }
-  useEffect(() => { loadPlays() /* first */ }, [gameId, signedIn])
+  useEffect(() => { loadPlays() }, [gameId, signedIn])
 
-  // サブスクリプション（読取のみ・作成/更新）
+  // サブスク
   useEffect(() => {
     const mode = signedIn ? 'userPool' : 'iam'
     const sub1: any = (client.graphql({ query: ON_CREATE_PLAY, authMode: mode }) as any).subscribe?.({
@@ -367,8 +485,8 @@ function Game() {
         <table className="scoreTbl">
           <thead><tr><th></th><th>1Q</th><th>2Q</th><th>3Q</th><th>4Q</th><th>Total</th></tr></thead>
           <tbody>
-            <tr><th>{game.home}</th><td>{board.H.Q1}</td><td>{board.H.Q2}</td><td>{board.H.Q3}</td><td>{board.H.Q4}</td><td>{board.H.Total}</td></tr>
-            <tr><th>{game.visitor}</th><td>{board.V.Q1}</td><td>{board.V.Q2}</td><td>{board.V.Q3}</td><td>{board.V.Q4}</td><td>{board.V.Total}</td></tr>
+            <tr><th>{game.home ?? 'Home'}</th><td>{board.H.Q1}</td><td>{board.H.Q2}</td><td>{board.H.Q3}</td><td>{board.H.Q4}</td><td>{board.H.Total}</td></tr>
+            <tr><th>{game.visitor ?? 'Visitor'}</th><td>{board.V.Q1}</td><td>{board.V.Q2}</td><td>{board.V.Q3}</td><td>{board.V.Q4}</td><td>{board.V.Total}</td></tr>
           </tbody>
         </table>
       </div>
@@ -383,21 +501,20 @@ function Game() {
       />
 
       <div className="card">
-        <PlaysTable plays={plays} home={game.home} visitor={game.visitor} />
+        <PlaysTable plays={plays} home={game.home ?? 'Home'} visitor={game.visitor ?? 'Visitor'} />
       </div>
 
       <footer className="footer">
         <div className="row gap">
           <button className="btn gray" onClick={() => navigator.clipboard.writeText(location.href)}>URLコピー</button>
-          <CSVButton plays={plays} home={game.home} visitor={game.visitor} />
+          <CSVButton plays={plays} home={game.home ?? 'Home'} visitor={game.visitor ?? 'Visitor'} />
         </div>
       </footer>
     </div>
   )
 }
 
-// ===================== Editor =====================
-
+// =============== Editor ===============
 type EditorProps = {
   game: any
   plays: any[]
@@ -412,58 +529,45 @@ function PlayEditor({ game, plays, editMode, onSaved, onToggleEdit }: EditorProp
   const [saving, setSaving] = useState(false)
   const [highlightTime, setHighlightTime] = useState(false)
 
-  // 直前の QB/Passer をチーム別保持
   const lastPasserHome = useMemo(() => [...plays].reverse().find(x => x.attackTeam === 'home' && isNum(x.passerNo))?.passerNo || '', [plays])
   const lastPasserVisitor = useMemo(() => [...plays].reverse().find(x => x.attackTeam === 'visitor' && isNum(x.passerNo))?.passerNo || '', [plays])
 
-  // 攻守交替で時計入力を黄色強調
-  useEffect(() => {
-    setHighlightTime(true)
-    const t = setTimeout(() => setHighlightTime(false), 800)
-    return () => clearTimeout(t)
-  }, [p.attackTeam])
+  useEffect(() => { setHighlightTime(true); const t = setTimeout(()=>setHighlightTime(false), 800); return ()=>clearTimeout(t) }, [p.attackTeam])
 
-  // 入力補助：Yds ≥ TG → FD 自動ON
   useEffect(() => {
     if (isNum(p.gainYds) && isNum(p.toGo)) {
       setP((s: any) => ({ ...s, fd: Number(s.gainYds) >= Number(s.toGo) ? true : s.fd }))
     }
   }, [p.gainYds, p.toGo])
 
-  // Kick / Punt / FG → 1st&10 でシリーズ再開
   useEffect(() => {
     if (p.playType === 'Kick off' || p.playType === 'Punt' || p.playType === 'Field goal') {
       setP((s: any) => ({ ...s, down: 1, toGo: 10, fd: false }))
     }
   }, [p.playType])
 
-  // Spike/Knee/Time out はYds=0
   useEffect(() => {
     if (p.playType === 'Spike/Knee down' || p.playType === 'Time out') {
       setP((s: any) => ({ ...s, gainYds: 0 }))
     }
   }, [p.playType])
 
-  // BALL ON 自動（Run/Pass/Penalty/Spike/Knee）
   useEffect(() => {
     if (!isNum(p.ballOn) || !isNum(p.gainYds)) return
     if (!['Run', 'Pass', 'Penalty', 'Spike/Knee down'].includes(p.playType || '')) return
     const sign = p.fieldPos === 'H' ? 1 : -1
     let next = Number(p.ballOn) + sign * Number(p.gainYds)
-    if (next < 1) next = 1
-    if (next > 50) next = 50
+    next = Math.max(1, Math.min(50, next))
     setP((s: any) => ({ ...s, ballOn: next }))
   }, [p.gainYds])
 
-  // FD チェック用のガイド
   const fdHint = isNum(p.gainYds) && isNum(p.toGo) && Number(p.gainYds) >= Number(p.toGo)
 
-  // 保存処理（作成/更新）
   const save = async () => {
     setSaving(true)
     try {
       const base = { ...p, gameId: game.id, createdAt: p.createdAt || new Date().toISOString() }
-      const auth = 'userPool' // 編集はログイン前提
+      const auth = 'userPool'
       if (editingId) {
         await client.graphql({ query: UPDATE_PLAY, variables: { input: { ...base, id: editingId } }, authMode: auth })
       } else {
@@ -477,17 +581,9 @@ function PlayEditor({ game, plays, editMode, onSaved, onToggleEdit }: EditorProp
     } finally { setSaving(false) }
   }
 
-  // 編集開始
-  const startEdit = (row: any) => {
-    setEditingId(row.id)
-    setP({ ...row })
-  }
-
-  // 直前行を編集（最新上書き）
+  const startEdit = (row: any) => { setEditingId(row.id); setP({ ...row }) }
   const last = plays[plays.length - 1]
-  useEffect(() => {
-    ;(window as any).__editLast = () => last && startEdit(last)
-  }, [last])
+  useEffect(() => { (window as any).__editLast = () => last && startEdit(last) }, [last])
 
   return (
     <div className="card">
@@ -501,7 +597,6 @@ function PlayEditor({ game, plays, editMode, onSaved, onToggleEdit }: EditorProp
 
       {/* 入力エリア */}
       <div className="grid4" style={{ opacity: editMode ? 1 : .5, pointerEvents: editMode ? 'auto' : 'none' }}>
-        {/* Q */}
         <div className="block">
           <label>Q</label>
           <div className="seg">
@@ -511,18 +606,11 @@ function PlayEditor({ game, plays, editMode, onSaved, onToggleEdit }: EditorProp
           </div>
         </div>
 
-        {/* 時刻 */}
         <div className={`block ${highlightTime ? 'hilite' : ''}`}>
           <label>試合時間</label>
-          <input
-            className="input"
-            type="time"
-            value={p.time}
-            onChange={e => setP({ ...p, time: e.target.value })}
-          />
+          <input className="input" type="time" value={p.time} onChange={e => setP({ ...p, time: e.target.value })} />
         </div>
 
-        {/* Field position */}
         <div className="block">
           <label>Field position</label>
           <div className="seg">
@@ -534,7 +622,6 @@ function PlayEditor({ game, plays, editMode, onSaved, onToggleEdit }: EditorProp
           </div>
         </div>
 
-        {/* 攻撃チーム */}
         <div className="block">
           <label>攻撃</label>
           <div className="seg">
@@ -546,13 +633,9 @@ function PlayEditor({ game, plays, editMode, onSaved, onToggleEdit }: EditorProp
           </div>
         </div>
 
-        {/* BALL ON */}
         <NumBox label="BALL ON (1-50)" value={p.ballOn} setValue={v => setP({ ...p, ballOn: v })} min={1} max={50} />
-
-        {/* TO GO */}
         <NumBox label="TO GO (1-50)" value={p.toGo} setValue={v => setP({ ...p, toGo: v })} min={1} max={50} />
 
-        {/* DOWN (視覚的) */}
         <div className="block">
           <label>DOWN</label>
           <div className="seg">
@@ -562,7 +645,6 @@ function PlayEditor({ game, plays, editMode, onSaved, onToggleEdit }: EditorProp
           </div>
         </div>
 
-        {/* 獲得Yds */}
         <NumBox label="獲得Yds" value={p.gainYds} setValue={v => setP({ ...p, gainYds: v })} allowNegative />
       </div>
 
@@ -571,7 +653,7 @@ function PlayEditor({ game, plays, editMode, onSaved, onToggleEdit }: EditorProp
         {['Run', 'Pass', 'Penalty',
           'Kick off', 'Punt', 'Field goal',
           'TFP(Kick)', 'TFP(Run)', 'TFP(Pass)',
-          'Spike/Knee down', 'Safety', 'Time out'].map((k, i) =>
+          'Spike/Knee down', 'Safety', 'Time out'].map((k) =>
             <button key={k} className={`sel ${p.playType === k ? 'on' : ''}`} onClick={() => setP({ ...p, playType: k })}>
               {k}
             </button>
@@ -605,13 +687,13 @@ function PlayEditor({ game, plays, editMode, onSaved, onToggleEdit }: EditorProp
         <Select label="TURNOVER" value={p.turnover} setValue={v => setP({ ...p, turnover: v })}
           options={['-', 'Intercept', 'Fumble', '4th down失敗', 'Safety']} />
         <NumBox label="罰則Y" value={p.penaltyY} setValue={v => setP({ ...p, penaltyY: v })} />
-        <TextField label="備考 (上記で記載できない場合に利用)" value={p.remarks} onChange={e => setP({ ...p, remarks: e.target.value })} />
+        <TextField label="備考 (上記で記載できない場合に利用)" value={p.remarks ?? ''} onChange={e => setP({ ...p, remarks: e.target.value })} />
       </div>
 
       {/* 得点 */}
       <div className="grid3">
         <Select label="得点チーム" value={p.scoreTeam} setValue={v => setP({ ...p, scoreTeam: v })}
-          options={['-', 'home', 'visitor']} displayMap={{ home: game.home, visitor: game.visitor, '-': '-' }} />
+          options={['-', 'home', 'visitor']} displayMap={{ home: game.home ?? 'Home', visitor: game.visitor ?? 'Visitor', '-': '-' }} />
         <Select label="得点方法" value={p.scoreMethod} setValue={v => setP({ ...p, scoreMethod: v })}
           options={['-', 'TD', 'FG', 'Safety', 'TFP(Kick)', 'TFP(Run)', 'TFP(Pass)']} />
         <div />
@@ -634,15 +716,13 @@ function PlayEditor({ game, plays, editMode, onSaved, onToggleEdit }: EditorProp
           }}>行削除</button>}
       </div>
 
-      {/* 既存行から編集 */}
       <div className="space" />
       <ExistingPlaysMini plays={plays} onEdit={(row) => startEdit(row)} />
     </div>
   )
 }
 
-// ===================== 小コンポーネント =====================
-
+// =============== 小コンポーネント ===============
 function ExistingPlaysMini({ plays, onEdit }: { plays: any[], onEdit: (row: any) => void }) {
   return (
     <div className="miniTbl">
@@ -778,8 +858,7 @@ function NotFound() {
   return <div className="page"><Header title="【JPFF East】" subtitle="Game Scorer" /><div className="card">ページが見つかりません。</div></div>
 }
 
-// 新規行のデフォルト
-function newPlay(game: any) {
+function newPlay(_: any) {
   return {
     q: '1Q',
     time: '12:00',
@@ -805,7 +884,7 @@ function newPlay(game: any) {
   }
 }
 
-// ===================== Styles =====================
+// =============== Styles ===============
 function GlobalStyle() {
   return (
     <style>{`
@@ -836,7 +915,7 @@ function GlobalStyle() {
   .sel{ background:#253243; border:1px solid #324153; color:#fff; padding:10px; border-radius:14px; font-weight:700; }
   .sel.on{ background:var(--chipOn); }
   .seg{ display:flex; flex-wrap:wrap; gap:8px; }
-  .chip{ background:var(--chip); color:#fff; padding:8px 12px; border-radius:999px; border:1px solid #314052; }
+  .chip{ background:var(--chip); color:#fff; padding:8px 12px; border:1px solid #314052; border-radius:999px; }
   .chip.on{ background:var(--chipOn); border-color:transparent; }
   .space{ height:12px; }
   .muted{ color:var(--muted); }
