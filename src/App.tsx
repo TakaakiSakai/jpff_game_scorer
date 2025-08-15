@@ -1,8 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+// ↑ App.tsx の一番上だけに置く（ここ以外に同じ import を書かない）
 import React, { useEffect, useMemo, useState } from 'react'
 import { Link, Routes, Route, BrowserRouter, useNavigate, useParams } from 'react-router-dom'
-import { Button, TextField, Authenticator } from '@aws-amplify/ui-react'
+
+// Amplify UI は Authenticator だけでOK（TextField/Buttonは使っていない）
+import { Authenticator } from '@aws-amplify/ui-react'
 import '@aws-amplify/ui-react/styles.css'
+
+// Amplify
 import { generateClient } from 'aws-amplify/api'
 import { getCurrentUser } from 'aws-amplify/auth'
 
@@ -160,10 +165,7 @@ export default function App() {
 }
 
 // ===================== Home =====================
-// 置き換え：Home
-import { getCurrentUser } from 'aws-amplify/auth'
-import { Authenticator } from '@aws-amplify/ui-react'
-import '@aws-amplify/ui-react/styles.css'
+
 
 function Home() {
   const [signedIn, setSignedIn] = React.useState(false)
