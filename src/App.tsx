@@ -160,26 +160,53 @@ export default function App() {
 }
 
 // ===================== Home =====================
+// 置き換え：Home
+import { getCurrentUser } from 'aws-amplify/auth'
+import { Authenticator } from '@aws-amplify/ui-react'
+import '@aws-amplify/ui-react/styles.css'
+
 function Home() {
+  const [signedIn, setSignedIn] = React.useState(false)
+  const [checking, setChecking] = React.useState(true)
   const qs = new URLSearchParams(location.search)
   const gid = qs.get('id')
+
+  React.useEffect(() => {
+    (async () => {
+      try { await getCurrentUser(); setSignedIn(true) } catch { setSignedIn(false) }
+      finally { setChecking(false) }
+    })()
+  }, [])
+
   return (
     <div className="page">
       <Header title="【JPFF East】" subtitle="Game Scorer" />
       <div className="card">
-        <div className="stack">
-          <p>試合URLを共有すると、ログイン済みユーザーは「編集」、未ログインは「参照」で閲覧できます。</p>
-          <div className="row gap">
-            <Link className="btn gray" to="/setup">試合を作成</Link>
-            {gid && <Link className="btn" to={`/game/${gid}`}>試合へ移動</Link>}
+        {!checking && !signedIn ? (
+          <>
+            <h2>サインイン / ユーザー作成</h2>
+            <p className="muted" style={{marginTop:4}}>ログインすると試合作成・編集ができます。</p>
+            <div style={{marginTop:12}}>
+              <Authenticator signUpAttributes={['email']} />
+            </div>
+          </>
+        ) : (
+          <div className="stack">
+            <p>試合URLを共有すると、ログイン済みユーザーは「編集」、未ログインは「参照」で閲覧できます。</p>
+            <div className="row gap">
+              <Link className="btn gray" to="/setup">試合を作成</Link>
+              {gid && <Link className="btn" to={`/game/${gid}`}>試合へ移動</Link>}
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   )
 }
 
+
 // ===================== Setup =====================
+// 置き換え：Setup
 function Setup() {
   const nav = useNavigate()
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10))
@@ -187,51 +214,90 @@ function Setup() {
   const [home, setHome] = useState('')
   const [visitor, setVisitor] = useState('')
   const [saving, setSaving] = useState(false)
+  const [signedIn, setSignedIn] = useState(false)
+  const [showAuth, setShowAuth] = useState(false)
+
+  useEffect(() => {
+    (async () => { try { await getCurrentUser(); setSignedIn(true) } catch { setSignedIn(false) } })()
+  }, [])
+
+  async function createGame() {
+    if (!home || !visitor) { alert('ホーム/ビジターを入力してください'); return }
+    // ログインしていなければログインモーダル表示
+    if (!signedIn) { setShowAuth(true); return }
+    setSaving(true)
+    try {
+      const res: any = await client.graphql({
+        query: CREATE_GAME,
+        variables: { input: { date, venue, home, visitor, status: 'scheduled' } },
+        authMode: 'userPool'
+      })
+      const id = res?.data?.createGame?.id
+      if (id) nav(`/game/${id}`)
+      else alert('作成に失敗しました')
+    } catch (e: any) {
+      alert(e?.errors?.[0]?.message || e?.message || '作成失敗')
+    } finally { setSaving(false) }
+  }
 
   return (
     <div className="page">
       <Header title="【JPFF East】" subtitle="Game Scorer" />
       <div className="card">
         <h2>試合作成（サインインが必要）</h2>
+
+        {/* 入力は常に可能 */}
         <div className="grid2">
-          <TextField label="試合日" type="date" value={date} onChange={e => setDate(e.target.value)} />
-          <TextField label="会場" value={venue} onChange={e => setVenue(e.target.value)} />
-          <TextField label="ホーム" value={home} onChange={e => setHome(e.target.value)} />
-          <TextField label="ビジター" value={visitor} onChange={e => setVisitor(e.target.value)} />
+          <div className="block">
+            <label>試合日</label>
+            <input className="input" type="date" value={date} onChange={(e)=>setDate(e.target.value)} />
+          </div>
+          <div className="block">
+            <label>会場</label>
+            <input className="input" value={venue} onChange={(e)=>setVenue(e.target.value)} />
+          </div>
+          <div className="block">
+            <label>ホーム</label>
+            <input className="input" value={home} onChange={(e)=>setHome(e.target.value)} />
+          </div>
+          <div className="block">
+            <label>ビジター</label>
+            <input className="input" value={visitor} onChange={(e)=>setVisitor(e.target.value)} />
+          </div>
         </div>
+
         <div className="space" />
-        <Authenticator>
-          {() => (
-            <Button
-              variation="primary"
-              isLoading={saving}
-              onClick={async () => {
-                if (!home || !visitor) { alert('ホーム/ビジターを入力'); return }
-                setSaving(true)
-                try {
-                  const res: any = await client.graphql({
-                    query: CREATE_GAME,
-                    variables: { input: { date, venue, home, visitor, status: 'scheduled' } },
-                    authMode: 'userPool'
-                  })
-                  const id = res?.data?.createGame?.id
-                  if (id) nav(`/game/${id}`)
-                  else alert('作成に失敗しました')
-                } catch (e: any) {
-                  alert(e?.errors?.[0]?.message || e?.message || '作成失敗')
-                } finally {
-                  setSaving(false)
-                }
-              }}
-            >作成</Button>
-          )}
-        </Authenticator>
+        <button className="btn" onClick={createGame} disabled={saving}>
+          {saving ? '作成中…' : '作成'}
+        </button>
         <div className="space" />
         <Link className="muted" to="/">&laquo; トップへ</Link>
       </div>
+
+      {/* 未ログインで「作成」を押したときのモーダル */}
+      {showAuth && (
+        <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'grid', placeItems:'center', zIndex:1000}}>
+          <div className="card" style={{width:'min(600px, 92vw)'}}>
+            <div className="row between">
+              <h3>サインイン / ユーザー作成</h3>
+              <button className="btn gray" onClick={()=>setShowAuth(false)}>閉じる</button>
+            </div>
+            <div style={{marginTop:12}}>
+              <Authenticator signUpAttributes={['email']}>
+                {({ user }) => {
+                  // ログイン完了で自動閉じる
+                  if (user && showAuth) { setSignedIn(true); setShowAuth(false) }
+                  return null
+                }}
+              </Authenticator>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
+
 
 // ===================== Game =====================
 function Game() {
