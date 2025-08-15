@@ -1,16 +1,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-// ↑ App.tsx の一番上だけに置く（ここ以外に同じ import を書かない）
-// App.tsx の先頭あたり
-import React, { useEffect, useMemo, useState } from 'react'
-import { Link, Routes, Route, BrowserRouter, useNavigate, useParams } from 'react-router-dom'
-
-// ここを TextField を含めて1本化
-import { Authenticator, TextField } from '@aws-amplify/ui-react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
+import { Link, Routes, Route, useNavigate, useParams, useLocation, BrowserRouter } from 'react-router-dom'
+import { Button, TextField, Authenticator, View } from '@aws-amplify/ui-react'
 import '@aws-amplify/ui-react/styles.css'
-
 import { generateClient } from 'aws-amplify/api'
 import { getCurrentUser } from 'aws-amplify/auth'
-
 
 // ===================== Amplify client =====================
 const client = generateClient()
@@ -135,6 +129,8 @@ const ON_UPDATE_PLAY = /* GraphQL */ `
 
 // ===================== helpers =====================
 const isNum = (v: any) => v !== null && v !== undefined && v !== '' && !isNaN(Number(v))
+const num = (v: any, d: number | null = null) => (isNum(v) ? Number(v) : d)
+
 const scorePoints = (method?: string) => {
   switch (method) {
     case 'TD': return 6
@@ -146,6 +142,7 @@ const scorePoints = (method?: string) => {
     default: return 0
   }
 }
+
 const to2 = (n: number) => (n < 10 ? `0${n}` : `${n}`)
 
 // ===================== Root =====================
@@ -166,50 +163,26 @@ export default function App() {
 }
 
 // ===================== Home =====================
-
-
 function Home() {
-  const [signedIn, setSignedIn] = React.useState(false)
-  const [checking, setChecking] = React.useState(true)
   const qs = new URLSearchParams(location.search)
   const gid = qs.get('id')
-
-  React.useEffect(() => {
-    (async () => {
-      try { await getCurrentUser(); setSignedIn(true) } catch { setSignedIn(false) }
-      finally { setChecking(false) }
-    })()
-  }, [])
-
   return (
     <div className="page">
       <Header title="【JPFF East】" subtitle="Game Scorer" />
       <div className="card">
-        {!checking && !signedIn ? (
-          <>
-            <h2>サインイン / ユーザー作成</h2>
-            <p className="muted" style={{marginTop:4}}>ログインすると試合作成・編集ができます。</p>
-            <div style={{marginTop:12}}>
-              <Authenticator signUpAttributes={['email']} />
-            </div>
-          </>
-        ) : (
-          <div className="stack">
-            <p>試合URLを共有すると、ログイン済みユーザーは「編集」、未ログインは「参照」で閲覧できます。</p>
-            <div className="row gap">
-              <Link className="btn gray" to="/setup">試合を作成</Link>
-              {gid && <Link className="btn" to={`/game/${gid}`}>試合へ移動</Link>}
-            </div>
+        <div className="stack">
+          <p>試合URLを共有すると、ログイン済みユーザーは「編集」、未ログインは「参照」で閲覧できます。</p>
+          <div className="row gap">
+            <Link className="btn gray" to="/setup">試合を作成</Link>
+            {gid && <Link className="btn" to={`/game/${gid}`}>試合へ移動</Link>}
           </div>
-        )}
+        </div>
       </div>
     </div>
   )
 }
 
-
 // ===================== Setup =====================
-// 置き換え：Setup
 function Setup() {
   const nav = useNavigate()
   const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10))
@@ -217,94 +190,56 @@ function Setup() {
   const [home, setHome] = useState('')
   const [visitor, setVisitor] = useState('')
   const [saving, setSaving] = useState(false)
-  const [signedIn, setSignedIn] = useState(false)
-  const [showAuth, setShowAuth] = useState(false)
-
-  useEffect(() => {
-    (async () => { try { await getCurrentUser(); setSignedIn(true) } catch { setSignedIn(false) } })()
-  }, [])
-
-  async function createGame() {
-    if (!home || !visitor) { alert('ホーム/ビジターを入力してください'); return }
-    // ログインしていなければログインモーダル表示
-    if (!signedIn) { setShowAuth(true); return }
-    setSaving(true)
-    try {
-      const res: any = await client.graphql({
-        query: CREATE_GAME,
-        variables: { input: { date, venue, home, visitor, status: 'scheduled' } },
-        authMode: 'userPool'
-      })
-      const id = res?.data?.createGame?.id
-      if (id) nav(`/game/${id}`)
-      else alert('作成に失敗しました')
-    } catch (e: any) {
-      alert(e?.errors?.[0]?.message || e?.message || '作成失敗')
-    } finally { setSaving(false) }
-  }
 
   return (
     <div className="page">
       <Header title="【JPFF East】" subtitle="Game Scorer" />
       <div className="card">
         <h2>試合作成（サインインが必要）</h2>
-
-        {/* 入力は常に可能 */}
         <div className="grid2">
-          <div className="block">
-            <label>試合日</label>
-            <input className="input" type="date" value={date} onChange={(e)=>setDate(e.target.value)} />
-          </div>
-          <div className="block">
-            <label>会場</label>
-            <input className="input" value={venue} onChange={(e)=>setVenue(e.target.value)} />
-          </div>
-          <div className="block">
-            <label>ホーム</label>
-            <input className="input" value={home} onChange={(e)=>setHome(e.target.value)} />
-          </div>
-          <div className="block">
-            <label>ビジター</label>
-            <input className="input" value={visitor} onChange={(e)=>setVisitor(e.target.value)} />
-          </div>
+          <TextField label="試合日" type="date" value={date} onChange={e => setDate(e.target.value)} />
+          <TextField label="会場" value={venue} onChange={e => setVenue(e.target.value)} />
+          <TextField label="ホーム" value={home} onChange={e => setHome(e.target.value)} />
+          <TextField label="ビジター" value={visitor} onChange={e => setVisitor(e.target.value)} />
         </div>
-
         <div className="space" />
-        <button className="btn" onClick={createGame} disabled={saving}>
-          {saving ? '作成中…' : '作成'}
-        </button>
+        <Authenticator>
+          {() => (
+            <Button
+              variation="primary"
+              isLoading={saving}
+              onClick={async () => {
+                if (!home || !visitor) { alert('ホーム/ビジターを入力'); return }
+                setSaving(true)
+                try {
+                  const res: any = await client.graphql({
+                    query: CREATE_GAME,
+                    variables: { input: { date, venue, home, visitor, status: 'scheduled' } },
+                    authMode: 'userPool'
+                  })
+                  const id = res?.data?.createGame?.id
+                  if (id) nav(`/game/${id}`)
+                  else alert('作成に失敗しました')
+                } catch (e: any) {
+                  alert(e?.errors?.[0]?.message || e?.message || '作成失敗')
+                } finally {
+                  setSaving(false)
+                }
+              }}
+            >作成</Button>
+          )}
+        </Authenticator>
         <div className="space" />
         <Link className="muted" to="/">&laquo; トップへ</Link>
       </div>
-
-      {/* 未ログインで「作成」を押したときのモーダル */}
-      {showAuth && (
-        <div style={{position:'fixed', inset:0, background:'rgba(0,0,0,.6)', display:'grid', placeItems:'center', zIndex:1000}}>
-          <div className="card" style={{width:'min(600px, 92vw)'}}>
-            <div className="row between">
-              <h3>サインイン / ユーザー作成</h3>
-              <button className="btn gray" onClick={()=>setShowAuth(false)}>閉じる</button>
-            </div>
-            <div style={{marginTop:12}}>
-              <Authenticator signUpAttributes={['email']}>
-                {({ user }) => {
-                  // ログイン完了で自動閉じる
-                  if (user && showAuth) { setSignedIn(true); setShowAuth(false) }
-                  return null
-                }}
-              </Authenticator>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }
 
-
 // ===================== Game =====================
 function Game() {
   const { id: gameId } = useParams()
+  const nav = useNavigate()
   const [signedIn, setSignedIn] = useState(false)
   const [game, setGame] = useState<any>(null)
   const [loading, setLoading] = useState(true)
@@ -380,9 +315,9 @@ function Game() {
       setPlays(items)
     }
   }
-  useEffect(() => { loadPlays() }, [gameId, signedIn])
+  useEffect(() => { loadPlays() /* first */ }, [gameId, signedIn])
 
-  // サブスクリプション
+  // サブスクリプション（読取のみ・作成/更新）
   useEffect(() => {
     const mode = signedIn ? 'userPool' : 'iam'
     const sub1: any = (client.graphql({ query: ON_CREATE_PLAY, authMode: mode }) as any).subscribe?.({
@@ -636,7 +571,7 @@ function PlayEditor({ game, plays, editMode, onSaved, onToggleEdit }: EditorProp
         {['Run', 'Pass', 'Penalty',
           'Kick off', 'Punt', 'Field goal',
           'TFP(Kick)', 'TFP(Run)', 'TFP(Pass)',
-          'Spike/Knee down', 'Safety', 'Time out'].map((k) =>
+          'Spike/Knee down', 'Safety', 'Time out'].map((k, i) =>
             <button key={k} className={`sel ${p.playType === k ? 'on' : ''}`} onClick={() => setP({ ...p, playType: k })}>
               {k}
             </button>
@@ -901,7 +836,7 @@ function GlobalStyle() {
   .sel{ background:#253243; border:1px solid #324153; color:#fff; padding:10px; border-radius:14px; font-weight:700; }
   .sel.on{ background:var(--chipOn); }
   .seg{ display:flex; flex-wrap:wrap; gap:8px; }
-  .chip{ background:var(--chip); color:#fff; padding:8px 12px; border:1px solid #314052; border-radius:999px; }
+  .chip{ background:var(--chip); color:#fff; padding:8px 12px; border-radius:999px; border:1px solid #314052; }
   .chip.on{ background:var(--chipOn); border-color:transparent; }
   .space{ height:12px; }
   .muted{ color:var(--muted); }
