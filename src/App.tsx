@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-// App.tsx — Dark UI + full play editor, team names are stored locally only.
+// App.tsx — Dark UI + full play editor, team names are local only.
 
 import React, { useEffect, useMemo, useState } from 'react'
 import { BrowserRouter, Routes, Route, Link, useNavigate, useParams } from 'react-router-dom'
@@ -11,7 +11,7 @@ import { getCurrentUser } from 'aws-amplify/auth'
 // ===== Amplify client =====
 const client = generateClient()
 
-// ===== GraphQL (Game/Play だけ。Team は使わない) =====
+// ===== GraphQL (Game/Play only. Team is NOT used.) =====
 const GET_GAME = /* GraphQL */ `
   query GetGame($id: ID!) {
     getGame(id: $id) { id date venue home homeTeamID awayTeamID status editToken }
@@ -106,7 +106,7 @@ const ON_UPDATE_PLAY = /* GraphQL */ `
   } }
 `
 
-// ===== Local team-name store (端末ローカル) =====
+// ===== Local team-name store (browser localStorage) =====
 type LocalNames = { home?: string; visitor?: string }
 const LS_KEY = (gameId: string) => `jpff:gameNames:${gameId}`
 const setLocalNames = (gameId: string, names: LocalNames) =>
@@ -158,9 +158,9 @@ function Home() {
         {!signedIn && (
           <>
             <h3>サインイン / ユーザー作成</h3>
-            {/* ダークモード固定 */}
             <div style={{ marginTop: 10 }}>
-              <Authenticator colorMode="dark" signUpAttributes={['email']} />
+              {/* colorMode は使わず、CSS でダーク化 */}
+              <Authenticator signUpAttributes={['email']} />
             </div>
             <div className="space" />
           </>
@@ -240,7 +240,7 @@ function Setup() {
               <button className="btn gray" onClick={() => setShowAuth(false)}>閉じる</button>
             </div>
             <div style={{ marginTop: 12 }}>
-              <Authenticator colorMode="dark" signUpAttributes={['email']}>
+              <Authenticator signUpAttributes={['email']}>
                 {({ user }) => { if (user) { setShowAuth(false) } return null }}
               </Authenticator>
             </div>
@@ -264,7 +264,7 @@ function Game() {
   const homeName = game?.home || names.home || 'Home'
   const visitorName = game?.visitor || names.visitor || 'Visitor'
 
-  // Game 取得
+  // Game fetch
   useEffect(() => {
     if (!gameId) return
     let cancelled = false
@@ -283,7 +283,7 @@ function Game() {
     return () => { cancelled = true }
   }, [gameId])
 
-  // Plays 取得
+  // Plays fetch
   const loadPlays = async () => {
     if (!gameId) return
     try {
@@ -305,7 +305,7 @@ function Game() {
   }
   useEffect(() => { loadPlays() }, [gameId, signedIn])
 
-  // サブスク
+  // Subscriptions
   useEffect(() => {
     const mode = signedIn ? 'userPool' : 'iam'
     const s1: any = (client.graphql({ query: ON_CREATE_PLAY, authMode: mode }) as any).subscribe?.({
@@ -360,7 +360,6 @@ function Game() {
         </table>
       </div>
 
-      {/* ここが元の “フル” 入力UI（備考含む） */}
       <PlayEditor gameId={game.id} home={homeName} visitor={visitorName} plays={plays} onSaved={loadPlays} />
 
       <div className="card">
@@ -592,7 +591,7 @@ function Header({ title, subtitle }:{ title:string, subtitle:string }) {
       <div className="title">{title}<br/>{subtitle}</div>
       <div className="icons">
         <a className="icon" onClick={()=>navigator.clipboard.writeText(location.href)} title="URLコピー">⎘</a>
-        <Authenticator colorMode="dark" variation="modal">
+        <Authenticator>
           {({ signOut, user }) => user
             ? <a className="icon" onClick={signOut} title="サインアウト">⇦</a>
             : <span />
@@ -611,7 +610,7 @@ function blankPlay(){ return {
   turnover:'-', penaltyY:null, remarks:'', scoreTeam:'-', scoreMethod:'-'
 }}
 
-// ===== Dark Styles =====
+// ===== Dark Styles (Amplify UI も黒に) =====
 function Style(){
   return (<style>{`
 :root { --bg:#0a0d12; --card:#121821; --fg:#eaf0f5; --muted:#9fb2c3; --pri:#0ea5a4; --danger:#c23636; }
@@ -656,7 +655,7 @@ table.table th{ color:var(--muted); font-weight:700; }
 /* Modal */
 .modal{ position:fixed; inset:0; display:grid; place-items:center; background:rgba(0,0,0,.7); z-index:1000; }
 
-/* Amplify UI をダークに塗りつぶし */
+/* Amplify UI をダークに塗りつぶし（colorMode 不要） */
 .amplify-authenticator, .amplify-card, .amplify-flex, .amplify-view {
   --amplify-colors-background-primary: #0a0d12;
   --amplify-colors-background-secondary: #121821;
